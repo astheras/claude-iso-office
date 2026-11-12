@@ -37,12 +37,16 @@ const OWN = {
   link: 'claude://x/me',
 }
 
+// how many times the session list was read
+let polls = 0
+
 // What the engine does beneath the mod, answered one by one; the poll reads the session list through mcp.call.
 const engine = ($: any, on: any) => {
   on('command.register', () => ({ value: { command: 'office' } }))
   on('ui.open', () => ({ value: { isPlaced: true } }))
   on('session.start', (_: unknown, e: any) => ({ cwd: e.cwd }))
   on('clock.every', () => ({ value: { id: 'timer' } }))
+  on('clock.after', () => ({ value: { id: 'after' } }))
   on('ui.status', () => ({ value: undefined }))
   on('env.get', (_: unknown, e: any) => ({
     value: e.name === 'CLAUDE_CODE_HOST_SESSION_ID' ? OWN.sessionId : e.name === 'USERPROFILE' ? 'C:/Users/x' : undefined,
@@ -51,12 +55,15 @@ const engine = ($: any, on: any) => {
   on('fs.list', () => ({ value: [{ name: '1.json', kind: 'file' }, { name: '1.key', kind: 'file' }] }))
   on('fs.read', () => ({ value: JSON.stringify({ status: 'waiting', hostSessionId: 'b' }) }))
   // like the app: list_sessions leaves out the session that asks; get_session answers for it
-  on('mcp.call', (_: unknown, e: any) => ({
-    value: {
-      content: [{ type: 'text', text: JSON.stringify(e.tool === 'get_session' ? OWN : SESSIONS) }],
-      isError: false,
-    },
-  }))
+  on('mcp.call', (_: unknown, e: any) => {
+    if (e.tool === 'list_sessions') polls++
+    return {
+      value: {
+        content: [{ type: 'text', text: JSON.stringify(e.tool === 'get_session' ? OWN : SESSIONS) }],
+        isError: false,
+      },
+    }
+  })
 }
 
 const started = async ($: any, on: any) => {
@@ -121,5 +128,15 @@ test('the desktop list has the groups, each session with its project under the t
   expect(await ui.find({ type: 'Button', text: /Chat B/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /чекає відповіді/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /my project · PR 34/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('drawing the pane reads the sessions again, so switching to a chat shows fresh data', async ($, on) => {
+  await started($, on)
+  const before = polls
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  await new Promise(r => (globalThis as any).setTimeout(r, 100))
+
+  expect(polls).toBeGreaterThan(before)
   await ui.unmount()
 })

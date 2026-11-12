@@ -33,7 +33,12 @@ const STUCK_MS = 20000
 // after a turn starts or ends the app takes a moment to flip `isRunning`: ask once more shortly after
 const SETTLE_MS = 1500
 
+// drawing the pane asks for a fresh poll, at most this often: switching to a chat draws its pane, and the timer of a
+// chat that was in the background may not have run while the person was elsewhere
+const RENDER_POLL_MS = 1500
+
 let isPolling = false
+let lastRenderPollAt = 0
 let pollStartedAt = 0
 let lastPollAt = 0
 let ticker: Timer | undefined
@@ -188,6 +193,7 @@ export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     await $.command.register({ name: 'office', description: 'Office pane: /office [mute|unmute|seen]' })
     void open($)
+    lastRenderPollAt = 0
     void poll($)
     ensureTicker($, true)
     return next(e)
@@ -226,6 +232,14 @@ export const register: Register = on => {
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
+    // refresh when the pane is drawn (switching chats draws it); a timer, since a hook that draws may not write state
+    const t = Date.now()
+    if (t - lastRenderPollAt > RENDER_POLL_MS) {
+      lastRenderPollAt = t
+      ensureTicker($)
+      $.clock.after(1, () => void poll($))
+    }
+
     const els = $.ui.resolve(e)
     const { Box, Text, Button } = els
     // the terminal draws no SVG: it gets the roster in words, whatever its table says
