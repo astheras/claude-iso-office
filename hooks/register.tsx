@@ -2,7 +2,8 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, Timer } from 'claude-code'
 
 import type { Memory, Office, RawSession, Room, View, Worker } from '../types'
-import { ack, ago, classify, emptyMemory, parseSessions, summary, WORD } from './data'
+import { ack, ago, classify, emptyMemory, groupSessions, parseSessions, summary, WORD } from './data'
+import type { Group } from './data'
 import { floorSvg } from './floor'
 import type { Label, Spot } from './floor'
 
@@ -61,6 +62,35 @@ async function ownSession($: EngineInterface, id: string | undefined): Promise<R
   }
 }
 
+/**
+ * Ids of the chats that are blocked on the person. list_sessions does not say so, but each running chat keeps a
+ * registry file (~/.claude/sessions/<pid>.json) with its `status` and its app id; `waiting` is a permission or a question.
+ * Anything unreadable counts as nobody: the list then has no "need an answer" group, nothing else changes.
+ */
+async function waitingSessions($: EngineInterface): Promise<Set<string>> {
+  const ids = new Set<string>()
+  try {
+    const home = (await $.env.get('USERPROFILE')) || (await $.env.get('HOME'))
+    if (!home) return ids
+    const dir = `${home.replace(/\\/g, '/')}/.claude/sessions`
+    const files = (await $.fs.list(dir)).filter(f => /^\d+\.json$/.test(f.name))
+    await Promise.all(
+      files.map(async f => {
+        try {
+          const j: unknown = JSON.parse(await $.fs.read(`${dir}/${f.name}`))
+          const o = j as { status?: unknown; hostSessionId?: unknown }
+          if (o && o.status === 'waiting' && typeof o.hostSessionId === 'string') ids.add(o.hostSessionId)
+        } catch {
+          // a file that is half written or just removed: skip it
+        }
+      }),
+    )
+  } catch {
+    // no registry to read
+  }
+  return ids
+}
+
 async function poll($: EngineInterface) {
   const t = Date.now()
   if (isPolling && t - pollStartedAt < STUCK_MS) return
@@ -68,13 +98,15 @@ async function poll($: EngineInterface) {
   pollStartedAt = t
   try {
     const me = await ownId($)
-    const [r, own] = await Promise.all([
+    const [r, own, asking] = await Promise.all([
       $.mcp.call('ccd_session_mgmt', 'list_sessions', { limit: 100 }),
       ownSession($, me),
+      waitingSessions($),
     ])
     if (r.isError) throw new Error(textOf(r.content).slice(0, 200))
-    const raw = parseSessions(textOf(r.content))
-    if (own && !raw.some(s => s.sessionId === own.sessionId)) raw.push(own)
+    const listed = parseSessions(textOf(r.content))
+    if (own && !listed.some(s => s.sessionId === own.sessionId)) listed.push(own)
+    const raw = listed.map(s => (asking.has(s.sessionId) ? { ...s, needsAnswer: true } : s))
     lastPollAt = Date.now()
     const prev = await read($, memory)
     const prevOffice = await read($, office)
@@ -124,6 +156,7 @@ function pollSoon($: EngineInterface) {
 const open = ($: EngineInterface) => $.ui.open({ id: PANE, title: TITLE })
 
 const MARK = { work: '▶', wait: '!', rest: '·', home: '' } as const
+const GROUP_MARK = { ask: '?', work: '▶', done: '!' } as const
 
 async function seen($: EngineInterface, ids: string[]) {
   await update($, memory, m => ids.reduce((acc, id) => ack(acc, id), m) as Memory)
@@ -225,6 +258,47 @@ export const register: Register = on => {
       </Box>
     )
 
+    // below the drawing: sessions in three lists, a title and, under it, the project; only the chosen project when one is
+    const groups = groupSessions(shown)
+    const item = (g: Group, { w, room: r }: Group['items'][number]) => (
+      <Box flexDirection="column">
+        <Box flexDirection="row" gap={1}>
+          <Button key={`pick-${w.id}`} plain onPress={() => void pick($, w.id)}>
+            <Text color={g.color}>{GROUP_MARK[g.key]}</Text> {w.parentId ? '↳ ' : ''}
+            {w.title}
+            <Text dimColor>
+              {' '}
+              — {g.key === 'ask' ? 'чекає відповіді' : WORD[w.kind]}, {ago(w.activityAt, now)}
+            </Text>
+          </Button>
+          {g.key === 'done' && (
+            <Button key={`ack-${w.id}`} plain onPress={() => void seen($, [w.id])}>
+              ок
+            </Button>
+          )}
+        </Box>
+        <Box paddingLeft={2}>
+          <Text dimColor>
+            {r.name}
+            {w.prNumber ? ` · PR ${w.prNumber}` : ''}
+          </Text>
+        </Box>
+      </Box>
+    )
+    const lists = (
+      <Box flexDirection="column" gap={1}>
+        {groups.map(g => (
+          <Box flexDirection="column">
+            <Text bold color={g.color}>
+              {g.title} · {g.items.length}
+            </Text>
+            {g.items.map(x => item(g, x))}
+          </Box>
+        ))}
+        {groups.length === 0 && <Text dimColor>Немає сесій у роботі чи тих, що чекають.</Text>}
+      </Box>
+    )
+
     // cells per scene px; the drawing is as wide as the pane
     const cols = (e.props.bodyColumns ?? 76) + EXTRA_COLS
     const k = scene ? cols / scene.width : 0
@@ -297,7 +371,7 @@ export const register: Register = on => {
             </Box>
             {scene.hiddenRooms > 0 && <Text dimColor>Ще кімнат не показано: {scene.hiddenRooms}</Text>}
             {!room && quiet > 0 && <Text dimColor>Проєктів без активності (усі сесії вдома): {quiet}</Text>}
-            {room ? shown.flatMap(r => r.workers).map(row) : wait.map(row)}
+            {lists}
           </Box>
         ) : (
           // no drawing surface (terminal): the roster says the same in words

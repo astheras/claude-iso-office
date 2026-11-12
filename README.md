@@ -10,6 +10,7 @@ An isometric mini-office for the Claude Code desktop app. Every project folder i
 - **Sessions idle for more than a day** go home: they are counted on the room's label instead of being drawn.
 - **Click a worker** to see a card with the name of the chat, its project, PR and state, and a **Перейти в чат** ("Go to chat") button that opens that chat.
 - **Click a room's name** (or its button at the top) to look at that room alone, larger.
+- **Under the picture** the sessions are listed in groups, each with a title and its project name under it: **needs an answer** (orange), **in progress** (soft blue), **finished, waiting** (soft green). When a room is chosen at the top, only its sessions are listed.
 
 The pane fills the width of the panel and grows when you widen it. Hover over a worker for a tooltip.
 
@@ -49,6 +50,7 @@ This is a **Claude Code** plugin, not a general tool. It uses Claude Code's plug
 - **Перейти в чат** runs `cmd /c start` on the chat's `claude://` link, so it works on **Windows** only.
 - The click areas over the picture are placed in the pane's character cells, measured for the default desktop font (a cell is about 7.5 px wide and 20 px tall). With another font size they can be off; `/office debug` shows where they are.
 - The app does not tell a plugin that a session is waiting for you. "Finished, waiting" means: it was running, then stopped, and you have not pressed **ок** yet (it fades after 30 minutes).
+- "Needs an answer" is read from the status that each running chat keeps in `~/.claude/sessions/*.json` (`waiting`: a permission or a question). If that file cannot be read, the group stays empty and nothing else changes.
 - Sessions started from another one (forks) are drawn smaller.
 
 ## Develop

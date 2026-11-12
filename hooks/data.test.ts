@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { ack, classify, emptyMemory, HOME_MS, parseSessions, roomOf, WAIT_MS } from './data'
+import { ack, classify, emptyMemory, groupSessions, HOME_MS, parseSessions, roomOf, WAIT_MS } from './data'
 import type { RawSession } from '../types'
 
 const NOW = Date.parse('2026-11-12T12:00:00Z')
@@ -90,4 +90,36 @@ test('a change of kind is remembered with the one before it, and only from the s
   const third = classify([s('a')], second.memory, NOW + 10_000)
   const w3 = third.rooms[0]!.workers[0]!
   expect([w3.kind, w3.prevKind, w3.changedAt]).toEqual(['wait', 'work', NOW + 5000])
+})
+
+test('sessions are listed in three groups: needs an answer, working, finished and waiting', () => {
+  const first = classify([s('fin', { isRunning: true })], emptyMemory(), NOW)
+  const out = classify(
+    [
+      s('work', { isRunning: true, lastActivityAt: iso(1000) }),
+      s('ask', { isRunning: true, needsAnswer: true }),
+      s('fin'),
+      s('idle'),
+      s('other', { cwd: 'D:\\work\\shop', isRunning: true, lastActivityAt: iso(500) }),
+    ],
+    first.memory,
+    NOW,
+  )
+  const groups = groupSessions(out.rooms)
+  expect(groups.map(g => g.key)).toEqual(['ask', 'work', 'done'])
+  expect(groups[0]!.items.map(x => x.w.id)).toEqual(['ask'])
+  // the freshest first, across projects; each item carries its project
+  expect(groups[1]!.items.map(x => [x.w.id, x.room.name])).toEqual([
+    ['other', 'shop'],
+    ['work', 'my project'],
+  ])
+  expect(groups[2]!.items.map(x => x.w.id)).toEqual(['fin'])
+  // resting sessions are in no group, and a chosen project lists its own only
+  expect(groups.flatMap(g => g.items).some(x => x.w.id === 'idle')).toBe(false)
+  const mine = groupSessions(out.rooms.filter(r => r.name === 'my project'))
+  expect(mine.flatMap(g => g.items.map(x => x.room.name))).not.toContain('shop')
+})
+
+test('a group with nobody in it is left out', () => {
+  expect(groupSessions(classify([s('a')], emptyMemory(), NOW).rooms)).toEqual([])
 })

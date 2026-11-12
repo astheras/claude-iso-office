@@ -78,6 +78,7 @@ export function classify(raw: RawSession[], prev: Memory, now: number): Classifi
         changedAt: since,
         ...(prevKind ? { prevKind } : {}),
         prNumber: s.prState === 'OPEN' ? s.prNumber : undefined,
+        ...(s.needsAnswer ? { needsAnswer: true } : {}),
         parentId: s.startedBy && ids.has(s.startedBy) ? s.startedBy : undefined,
       },
     })
@@ -112,6 +113,28 @@ export function ack(mem: Memory, id: string): Memory {
   const one = mem.sessions[id]
   if (!one) return mem
   return { ...mem, sessions: { ...mem.sessions, [id]: { ...one, isAcked: true } } }
+}
+
+export type GroupKey = 'ask' | 'work' | 'done'
+
+export type Group = { key: GroupKey; title: string; color: string; items: { w: Worker; room: Room }[] }
+
+// orange asks for attention, soft blue is busy, soft green is finished; mid tones that read on a light and a dark theme
+const GROUP_DEFS: { key: GroupKey; title: string; color: string; has: (w: Worker) => boolean }[] = [
+  { key: 'ask', title: 'Потребують відповіді', color: '#E8943A', has: w => !!w.needsAnswer },
+  { key: 'work', title: 'У роботі', color: '#6FA8DC', has: w => !w.needsAnswer && w.kind === 'work' },
+  { key: 'done', title: 'Завершені, чекають', color: '#7FBF8E', has: w => !w.needsAnswer && w.kind === 'wait' },
+]
+
+/** The sessions of the given rooms in the three lists the pane shows, in that order; a list with nobody in it is left out. */
+export function groupSessions(rooms: Room[]): Group[] {
+  const all = rooms.flatMap(room => room.workers.map(w => ({ w, room })))
+  return GROUP_DEFS.map(d => ({
+    key: d.key,
+    title: d.title,
+    color: d.color,
+    items: all.filter(x => d.has(x.w)).sort((a, b) => b.w.activityAt - a.w.activityAt),
+  })).filter(g => g.items.length > 0)
 }
 
 export const WORD: Record<Kind, string> = {

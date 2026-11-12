@@ -44,7 +44,12 @@ const engine = ($: any, on: any) => {
   on('session.start', (_: unknown, e: any) => ({ cwd: e.cwd }))
   on('clock.every', () => ({ value: { id: 'timer' } }))
   on('ui.status', () => ({ value: undefined }))
-  on('env.get', (_: unknown, e: any) => ({ value: e.name === 'CLAUDE_CODE_HOST_SESSION_ID' ? OWN.sessionId : undefined }))
+  on('env.get', (_: unknown, e: any) => ({
+    value: e.name === 'CLAUDE_CODE_HOST_SESSION_ID' ? OWN.sessionId : e.name === 'USERPROFILE' ? 'C:/Users/x' : undefined,
+  }))
+  // the registry of running chats: session b is blocked on the person
+  on('fs.list', () => ({ value: [{ name: '1.json', kind: 'file' }, { name: '1.key', kind: 'file' }] }))
+  on('fs.read', () => ({ value: JSON.stringify({ status: 'waiting', hostSessionId: 'b' }) }))
   // like the app: list_sessions leaves out the session that asks; get_session answers for it
   on('mcp.call', (_: unknown, e: any) => ({
     value: {
@@ -102,5 +107,19 @@ test('the session the pane lives in is drawn working, though list_sessions leave
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
 
   expect(await ui.find({ type: 'Button', text: /This chat — працює/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('the desktop list has the groups, each session with its project under the title', async ($, on) => {
+  await started($, on)
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+
+  // b needs an answer (registry), a and this chat are working
+  expect(await ui.find({ type: 'Text', text: /Потребують відповіді · 1/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /У роботі · 2/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /Завершені, чекають/ })).toBeUndefined()
+  expect(await ui.find({ type: 'Button', text: /Chat B/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /чекає відповіді/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /my project · PR 34/ })).toBeDefined()
   await ui.unmount()
 })

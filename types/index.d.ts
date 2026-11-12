@@ -10,6 +10,8 @@ export type RawSession = {
   prState?: string
   startedBy?: string
   link?: string
+  /** the session is blocked on the person (a permission or a question); not in list_sessions, read from the registry */
+  needsAnswer?: boolean
 }
 
 /** work: running now. wait: finished lately and not yet looked at. rest: idle. home: idle over a day. */
@@ -26,6 +28,8 @@ export type Worker = {
   /** the kind before the last change, absent if first seen or unchanged since the mod started */
   prevKind?: Kind
   prNumber?: number
+  /** blocked on the person: listed first, whatever its kind */
+  needsAnswer?: boolean
   /** a session started from another one that is in the list: drawn as an intern */
   parentId?: string
 }
