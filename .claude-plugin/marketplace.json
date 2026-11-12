@@ -1,0 +1,5 @@
+{
+  "name": "claude-iso-office",
+  "owner": { "name": "astheras" },
+  "plugins": [{ "name": "iso-office", "source": "./" }]
+}

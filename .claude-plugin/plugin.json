@@ -1,0 +1,9 @@
+{
+  "name": "iso-office",
+  "version": "0.1.0",
+  "description": "An isometric mini-office for Claude Code: projects are rooms, sessions are workers who type, wait for you or take a coffee break.",
+  "author": { "name": "astheras" },
+  "license": "MIT",
+  "keywords": ["sessions", "dashboard", "visualization", "desktop"],
+  "types": "./types/index.d.ts"
+}
