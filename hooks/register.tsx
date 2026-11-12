@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, Register } from 'claude-code'
+import type { EngineInterface, Register, Timer } from 'claude-code'
 
-import type { Memory, Office, Room, View, Worker } from '../types'
+import type { Memory, Office, RawSession, Room, View, Worker } from '../types'
 import { ack, ago, classify, emptyMemory, parseSessions, summary, WORD } from './data'
 import { floorSvg } from './floor'
 import type { Label, Spot } from './floor'
@@ -27,7 +27,15 @@ const view = atom({ plugin: 'iso-office', key: 'view' } as const, { room: '', se
   shape: 'view-4',
 })
 
+// a poll that has not answered in this long is taken for lost, so one hung call cannot stop the office for good
+const STUCK_MS = 20000
+// after a turn starts or ends the app takes a moment to flip `isRunning`: ask once more shortly after
+const SETTLE_MS = 1500
+
 let isPolling = false
+let pollStartedAt = 0
+let lastPollAt = 0
+let ticker: Timer | undefined
 
 const textOf = (content: unknown): string =>
   Array.isArray(content)
@@ -38,13 +46,36 @@ const textOf = (content: unknown): string =>
 const quantize = (rooms: Room[]): Room[] =>
   rooms.map(r => ({ ...r, workers: r.workers.map(w => ({ ...w, activityAt: Math.floor(w.activityAt / 60000) * 60000 })) }))
 
-async function poll($: EngineInterface) {
-  if (isPolling) return
-  isPolling = true
+/** The id the app gives this very session; list_sessions never lists the session that asks, so it is fetched alone. */
+const ownId = async ($: EngineInterface) => (await $.env.get('CLAUDE_CODE_HOST_SESSION_ID')) || undefined
+
+async function ownSession($: EngineInterface, id: string | undefined): Promise<RawSession | undefined> {
+  if (!id) return undefined
   try {
-    const r = await $.mcp.call('ccd_session_mgmt', 'list_sessions', { limit: 100 })
+    const r = await $.mcp.call('ccd_session_mgmt', 'get_session', { session_id: id })
+    if (r.isError) return undefined
+    const s: unknown = JSON.parse(textOf(r.content))
+    return s && typeof s === 'object' && (s as RawSession).sessionId === id ? (s as RawSession) : undefined
+  } catch {
+    return undefined
+  }
+}
+
+async function poll($: EngineInterface) {
+  const t = Date.now()
+  if (isPolling && t - pollStartedAt < STUCK_MS) return
+  isPolling = true
+  pollStartedAt = t
+  try {
+    const me = await ownId($)
+    const [r, own] = await Promise.all([
+      $.mcp.call('ccd_session_mgmt', 'list_sessions', { limit: 100 }),
+      ownSession($, me),
+    ])
     if (r.isError) throw new Error(textOf(r.content).slice(0, 200))
     const raw = parseSessions(textOf(r.content))
+    if (own && !raw.some(s => s.sessionId === own.sessionId)) raw.push(own)
+    lastPollAt = Date.now()
     const prev = await read($, memory)
     const prevOffice = await read($, office)
     const now = Date.now()
@@ -57,8 +88,10 @@ async function poll($: EngineInterface) {
       await update($, office, () => ({ at: now, rooms }))
     }
     void $.ui.status(`Office: ${summary(rooms)}`)
-    if (!prev.muted && next.events.length > 0) {
-      const names = next.events.map(e => e.title)
+    // no toast for the chat the person is in: its answer is in front of them
+    const finished = next.events.filter(e => e.id !== me)
+    if (!prev.muted && finished.length > 0) {
+      const names = finished.map(e => e.title)
       void $.ui.toast(
         names.length === 1 ? `Закінчила: ${names[0]}` : `Закінчили (${names.length}): ${names.slice(0, 2).join(', ')}…`,
         { timeoutMs: 6000 },
@@ -69,8 +102,23 @@ async function poll($: EngineInterface) {
     const cur = await read($, office)
     if (cur.error !== msg) await update($, office, o => ({ ...o, error: msg }))
   } finally {
-    isPolling = false
+    // a poll declared lost must not clear the flag of the one that replaced it
+    if (pollStartedAt === t) isPolling = false
   }
+}
+
+/** Starts the five-second poll, or starts it again when it has gone quiet (a lost timer would freeze the office). */
+function ensureTicker($: EngineInterface, force = false) {
+  if (!force && ticker && Date.now() - lastPollAt < POLL_MS * 4) return
+  ticker?.cancel()
+  ticker = $.clock.every(POLL_MS, () => void poll($))
+}
+
+/** A turn starting or ending changes this session's state at once: look now, and again once the app has settled. */
+function pollSoon($: EngineInterface) {
+  ensureTicker($)
+  void poll($)
+  $.clock.after(SETTLE_MS, () => void poll($))
 }
 
 const open = ($: EngineInterface) => $.ui.open({ id: PANE, title: TITLE })
@@ -108,7 +156,18 @@ export const register: Register = on => {
     await $.command.register({ name: 'office', description: 'Office pane: /office [mute|unmute|seen]' })
     void open($)
     void poll($)
-    $.clock.every(POLL_MS, () => void poll($))
+    ensureTicker($, true)
+    return next(e)
+  })
+
+  // reactive reads: the person's prompt and the end of a turn move this session between desk and break area
+  on('turn.start', async ($, e, next) => {
+    if (e.agentId === undefined) pollSoon($)
+    return next(e)
+  })
+
+  on('turn.complete', async ($, e, next) => {
+    if (e.agentId === undefined) pollSoon($)
     return next(e)
   })
 
@@ -223,33 +282,6 @@ export const register: Register = on => {
           </Box>
         )}
 
-        {chosen && (
-          <Box flexDirection="column" borderStyle="round" paddingX={1}>
-            <Text bold>{chosen.w.title}</Text>
-            <Text dimColor>
-              {chosen.r.name}
-              {chosen.w.prNumber ? ` · PR ${chosen.w.prNumber}` : ''} · {WORD[chosen.w.kind]}, {ago(chosen.w.activityAt, now)}
-              {chosen.w.parentId ? ' · стажер' : ''}
-            </Text>
-            <Box flexDirection="row" gap={1}>
-              {e.surface !== 'mobile' && (
-                <Button key="go-chat" variant="primary" onPress={() => void openChat($, chosen.w.link)}>
-                  Перейти в чат
-                </Button>
-              )}
-              {chosen.w.kind === 'wait' && (
-                <Button key="card-ack" onPress={() => void seen($, [chosen.w.id])}>
-                  ок, бачив
-                </Button>
-              )}
-              <Button key="card-close" plain onPress={() => void pick($, chosen.w.id)}>
-                закрити
-              </Button>
-            </Box>
-            {v.note && <Text color="red">{v.note}</Text>}
-          </Box>
-        )}
-
         {Svg && scene ? (
           <Box flexDirection="column" gap={1}>
             <Box position="relative">
@@ -280,6 +312,34 @@ export const register: Register = on => {
                 {r.workers.map(row)}
               </Box>
             ))}
+          </Box>
+        )}
+
+        {/* the card goes last, below the drawing: opening it must not push the picture down */}
+        {chosen && (
+          <Box flexDirection="column" borderStyle="round" paddingX={1}>
+            <Text bold>{chosen.w.title}</Text>
+            <Text dimColor>
+              {chosen.r.name}
+              {chosen.w.prNumber ? ` · PR ${chosen.w.prNumber}` : ''} · {WORD[chosen.w.kind]}, {ago(chosen.w.activityAt, now)}
+              {chosen.w.parentId ? ' · стажер' : ''}
+            </Text>
+            <Box flexDirection="row" gap={1}>
+              {e.surface !== 'mobile' && (
+                <Button key="go-chat" variant="primary" onPress={() => void openChat($, chosen.w.link)}>
+                  Перейти в чат
+                </Button>
+              )}
+              {chosen.w.kind === 'wait' && (
+                <Button key="card-ack" onPress={() => void seen($, [chosen.w.id])}>
+                  ок, бачив
+                </Button>
+              )}
+              <Button key="card-close" plain onPress={() => void pick($, chosen.w.id)}>
+                закрити
+              </Button>
+            </Box>
+            {v.note && <Text color="red">{v.note}</Text>}
           </Box>
         )}
       </Box>
