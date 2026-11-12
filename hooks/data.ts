@@ -78,7 +78,7 @@ export function classify(raw: RawSession[], prev: Memory, now: number): Classifi
         changedAt: since,
         ...(prevKind ? { prevKind } : {}),
         prNumber: s.prState === 'OPEN' ? s.prNumber : undefined,
-        ...(s.needsAnswer ? { needsAnswer: true } : {}),
+        ...(s.needsAnswer ? { needsAnswer: true, ...(s.askedAt ? { askedAt: s.askedAt } : {}) } : {}),
         parentId: s.startedBy && ids.has(s.startedBy) ? s.startedBy : undefined,
       },
     })

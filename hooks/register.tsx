@@ -1,11 +1,14 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, Timer } from 'claude-code'
 
-import type { Memory, Office, RawSession, Room, View, Worker } from '../types'
+import type { Detail, DetailState, Memory, Office, RawSession, Room, View, Worker } from '../types'
 import { ack, ago, classify, emptyMemory, groupSessions, parseSessions, summary, WORD } from './data'
 import type { Group } from './data'
+import { detailRows, detailScript, parseDetail } from './detail'
 import { floorSvg } from './floor'
 import type { Label, Spot } from './floor'
+import { ICON_H, ICON_W, iconSvg } from './icons'
+import type { IconKind } from './icons'
 
 const PANE = 'iso-office'
 const TITLE = 'Office'
@@ -27,6 +30,13 @@ const office = atom({ plugin: 'iso-office', key: 'office' } as const, { at: 0, r
 const view = atom({ plugin: 'iso-office', key: 'view' } as const, { room: '', selected: '', note: '', debug: false } as View, {
   shape: 'view-4',
 })
+
+const detail = atom({ plugin: 'iso-office', key: 'detail' } as const, { id: '', at: 0, loading: false } as DetailState, {
+  shape: 'detail-1',
+})
+
+// the open chat's details are fetched again when older than this (cost moves at the end of each turn)
+const DETAIL_TTL_MS = 30000
 
 // a poll that has not answered in this long is taken for lost, so one hung call cannot stop the office for good
 const STUCK_MS = 20000
@@ -72,8 +82,8 @@ async function ownSession($: EngineInterface, id: string | undefined): Promise<R
  * registry file (~/.claude/sessions/<pid>.json) with its `status` and its app id; `waiting` is a permission or a question.
  * Anything unreadable counts as nobody: the list then has no "need an answer" group, nothing else changes.
  */
-async function waitingSessions($: EngineInterface): Promise<Set<string>> {
-  const ids = new Set<string>()
+async function waitingSessions($: EngineInterface): Promise<Map<string, number>> {
+  const ids = new Map<string, number>()
   try {
     const home = (await $.env.get('USERPROFILE')) || (await $.env.get('HOME'))
     if (!home) return ids
@@ -83,8 +93,10 @@ async function waitingSessions($: EngineInterface): Promise<Set<string>> {
       files.map(async f => {
         try {
           const j: unknown = JSON.parse(await $.fs.read(`${dir}/${f.name}`))
-          const o = j as { status?: unknown; hostSessionId?: unknown }
-          if (o && o.status === 'waiting' && typeof o.hostSessionId === 'string') ids.add(o.hostSessionId)
+          const o = j as { status?: unknown; hostSessionId?: unknown; statusUpdatedAt?: unknown }
+          if (o && o.status === 'waiting' && typeof o.hostSessionId === 'string') {
+            ids.set(o.hostSessionId, typeof o.statusUpdatedAt === 'number' ? o.statusUpdatedAt : 0)
+          }
         } catch {
           // a file that is half written or just removed: skip it
         }
@@ -111,7 +123,10 @@ async function poll($: EngineInterface) {
     if (r.isError) throw new Error(textOf(r.content).slice(0, 200))
     const listed = parseSessions(textOf(r.content))
     if (own && !listed.some(s => s.sessionId === own.sessionId)) listed.push(own)
-    const raw = listed.map(s => (asking.has(s.sessionId) ? { ...s, needsAnswer: true } : s))
+    const raw = listed.map(s => {
+      const since = asking.get(s.sessionId)
+      return since === undefined ? s : { ...s, needsAnswer: true, ...(since ? { askedAt: since } : {}) }
+    })
     lastPollAt = Date.now()
     const prev = await read($, memory)
     const prevOffice = await read($, office)
@@ -125,6 +140,15 @@ async function poll($: EngineInterface) {
       await update($, office, () => ({ at: now, rooms }))
     }
     void $.ui.status(`Office: ${summary(rooms)}`)
+
+    // the open chat's accordion: fetched again when it is not the chat held, or when its numbers have grown old
+    // (a fetch that has not finished in that time is taken for lost, and is made again)
+    const chosenId = (await read($, view)).selected
+    if (chosenId) {
+      const held = await read($, detail)
+      if (held.id !== chosenId || Date.now() - held.at > DETAIL_TTL_MS) void loadDetail($, chosenId)
+    }
+
     // no toast for the chat the person is in: its answer is in front of them
     const finished = next.events.filter(e => e.id !== me)
     if (!prev.muted && finished.length > 0) {
@@ -162,14 +186,84 @@ const open = ($: EngineInterface) => $.ui.open({ id: PANE, title: TITLE })
 
 const MARK = { work: '▶', wait: '!', rest: '·', home: '' } as const
 const GROUP_MARK = { ask: '?', work: '▶', done: '!' } as const
+// icons as plain glyphs, where there is no drawing to hold their tooltips
+const GLYPH: Record<IconKind, string> = { open: '↗', seen: '✓' }
 
 async function seen($: EngineInterface, ids: string[]) {
   await update($, memory, m => ids.reduce((acc, id) => ack(acc, id), m) as Memory)
   void poll($)
 }
 
-const pick = ($: EngineInterface, id: string) =>
-  update($, view, v => ({ ...v, selected: v.selected === id ? '' : id, note: '' }))
+/** A tool's answer as JSON, or nothing: a detail that cannot be read is simply left out of the accordion. */
+async function toolJson($: EngineInterface, tool: string, args: Record<string, unknown>): Promise<Record<string, unknown> | undefined> {
+  try {
+    const r = await $.mcp.call('ccd_session_mgmt', tool, args)
+    if (r.isError) return undefined
+    const j: unknown = JSON.parse(textOf(r.content))
+    return j && typeof j === 'object' ? (j as Record<string, unknown>) : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/** What the app keeps on disk about the chat (cost, tokens, turns), read by a short PowerShell run. */
+async function diskDetail($: EngineInterface, id: string): Promise<Detail> {
+  try {
+    const r = await $.process.run(['powershell', '-NoProfile', '-NonInteractive', '-Command', detailScript(id)], { timeoutMs: 20000 })
+    return r.exitCode === 0 ? parseDetail(r.stdout) : {}
+  } catch {
+    return {}
+  }
+}
+
+const strOf = (v: unknown): string | undefined => (typeof v === 'string' && v !== '' ? v : undefined)
+const numOf = (v: unknown): number | undefined => (typeof v === 'number' && Number.isFinite(v) ? v : undefined)
+
+/** Collects everything the accordion shows for one chat; what the app does not give is left out, never guessed. */
+async function loadDetail($: EngineInterface, id: string) {
+  const held = await read($, detail)
+  if (held.id !== id) await update($, detail, () => ({ id, at: Date.now(), loading: true }))
+  try {
+    const [sess, usage, disk] = await Promise.all([
+      toolJson($, 'get_session', { session_id: id }),
+      toolJson($, 'get_usage', { session_id: id }),
+      diskDetail($, id),
+    ])
+    const data: Detail = { ...disk }
+    // the app's live answer outranks the copy on disk
+    if (sess) {
+      const put = <K extends keyof Detail>(k: K, v: Detail[K] | undefined) => {
+        if (v !== undefined) data[k] = v
+      }
+      put('model', strOf(sess.model))
+      put('effort', strOf(sess.effort))
+      put('permissionMode', strOf(sess.permissionMode))
+      put('branch', strOf(sess.branch))
+      put('cwd', strOf(sess.cwd))
+      put('prState', strOf(sess.prState))
+      put('prNumber', numOf(sess.prNumber))
+      const created = typeof sess.createdAt === 'string' ? Date.parse(sess.createdAt) : NaN
+      if (Number.isFinite(created)) data.createdAt = created
+    }
+    const ctx = usage?.context as Record<string, unknown> | undefined
+    if (ctx && ctx.status === 'ok' && numOf(ctx.tokensUsed) !== undefined && numOf(ctx.contextWindow)) {
+      data.context = { used: numOf(ctx.tokensUsed)!, window: numOf(ctx.contextWindow)!, percent: numOf(ctx.percentUsed) ?? 0 }
+    }
+    // the person may have moved on while this was being read
+    if ((await read($, view)).selected !== id) return
+    await update($, detail, () => ({ id, at: Date.now(), loading: false, data }))
+  } catch {
+    const cur = await read($, detail)
+    if (cur.id === id && cur.loading) await update($, detail, () => ({ id, at: Date.now(), loading: false, ...(cur.data ? { data: cur.data } : {}) }))
+  }
+}
+
+/** Opens a chat's accordion, or closes it when it is the open one. */
+async function pick($: EngineInterface, id: string) {
+  const opening = (await read($, view)).selected !== id
+  await update($, view, v => ({ ...v, selected: opening ? id : '', note: '' }))
+  if (opening) void loadDetail($, id)
+}
 
 const goRoom = ($: EngineInterface, key: string) => update($, view, v => ({ ...v, room: key, note: '' }))
 
@@ -256,49 +350,92 @@ export const register: Register = on => {
     const scene = Svg && shown.length > 0 ? floorSvg(shown, now, v.selected) : undefined
     const count = (k: Worker['kind']) => shown.reduce((n, r) => n + r.workers.filter(w => w.kind === k).length, 0)
 
-    const chosen = o.rooms.flatMap(r => r.workers.map(w => ({ w, r }))).find(x => x.w.id === v.selected)
+    const ds = await read($, detail)
 
-    const row = (w: Worker) => (
-      <Box flexDirection="row" gap={1}>
-        <Button key={`pick-${w.id}`} plain dimColor={w.kind === 'rest'} onPress={() => void pick($, w.id)}>
-          {MARK[w.kind]} {w.parentId ? '↳ ' : ''}
-          {w.title} — {WORD[w.kind]}, {ago(w.activityAt, now)}
+    // an icon with a tooltip: a drawing carries the <title>, a clear Button over it takes the press; no drawing (the
+    // terminal): a plain glyph
+    const iconButton = (key: string, kind: IconKind, tip: string, onPress: () => void) =>
+      Svg ? (
+        <Box position="relative">
+          <Svg source={iconSvg(kind, tip)} alt={tip} width={ICON_W} height={ICON_H} isInteractive />
+          <Box position="absolute" top={0} left={0}>
+            <Button key={key} plain onPress={onPress}>
+              {BLANK}
+            </Button>
+          </Box>
+        </Box>
+      ) : (
+        <Button key={key} plain onPress={onPress}>
+          {GLYPH[kind]}
         </Button>
-        {w.kind === 'wait' && (
-          <Button key={`ack-${w.id}`} plain onPress={() => void seen($, [w.id])}>
-            ок
-          </Button>
-        )}
-      </Box>
-    )
+      )
+    const openIcon = (w: Worker) =>
+      e.surface !== 'mobile' && iconButton(`go-${w.id}`, 'open', 'Перейти в чат', () => void openChat($, w.link))
+    const seenIcon = (w: Worker) =>
+      iconButton(`ack-${w.id}`, 'seen', 'Позначити переглянутим', () => void seen($, [w.id]))
 
-    // below the drawing: sessions in three lists, a title and, under it, the project; only the chosen project when one is
-    const groups = groupSessions(shown)
-    const item = (g: Group, { w, room: r }: Group['items'][number]) => (
+    // what opens under a chosen chat: its state and how long it has lasted, what it cost, its tokens, and the rest
+    const accordion = (w: Worker, r: Room) => {
+      const mine = ds.id === w.id ? ds : undefined
+      const rows = detailRows(w, r, mine?.data, now)
+      return (
+        <Box flexDirection="column" paddingLeft={2}>
+          {rows.map(([label, value]) => (
+            <Box flexDirection="row" gap={1}>
+              <Box width={12}>
+                <Text dimColor>{label}</Text>
+              </Box>
+              <Text>{value}</Text>
+            </Box>
+          ))}
+          {(!mine || mine.loading) && <Text dimColor>Завантажую деталі…</Text>}
+          {mine?.data?.costUSD !== undefined && <Text dimColor>Вартість і токени — на кінець останнього ходу.</Text>}
+        </Box>
+      )
+    }
+
+    // the terminal roster: one line per chat, its accordion under it when chosen
+    const row = (w: Worker, r: Room) => (
       <Box flexDirection="column">
         <Box flexDirection="row" gap={1}>
-          <Button key={`pick-${w.id}`} plain onPress={() => void pick($, w.id)}>
-            <Text color={g.color}>{GROUP_MARK[g.key]}</Text> {w.parentId ? '↳ ' : ''}
-            {w.title}
-            <Text dimColor>
-              {' '}
-              — {g.key === 'ask' ? 'чекає відповіді' : WORD[w.kind]}, {ago(w.activityAt, now)}
-            </Text>
+          <Button key={`pick-${w.id}`} plain dimColor={w.kind === 'rest'} onPress={() => void pick($, w.id)}>
+            {MARK[w.kind]} {w.parentId ? '↳ ' : ''}
+            {w.title} — {WORD[w.kind]}, {ago(w.activityAt, now)}
           </Button>
-          {g.key === 'done' && (
-            <Button key={`ack-${w.id}`} plain onPress={() => void seen($, [w.id])}>
-              ок
-            </Button>
-          )}
+          {openIcon(w)}
+          {w.kind === 'wait' && seenIcon(w)}
         </Box>
-        <Box paddingLeft={2}>
-          <Text dimColor>
-            {r.name}
-            {w.prNumber ? ` · PR ${w.prNumber}` : ''}
-          </Text>
-        </Box>
+        {w.id === v.selected && accordion(w, r)}
       </Box>
     )
+
+    // below the drawing: sessions in three lists, a title and, under it, the project; only the chosen project when one is.
+    // The title is just the name (the group already says the state); the chosen one is bigger and bold.
+    const groups = groupSessions(shown)
+    const item = (g: Group, { w, room: r }: Group['items'][number]) => {
+      const isOpen = w.id === v.selected
+      return (
+        <Box flexDirection="column">
+          <Button key={`pick-${w.id}`} plain onPress={() => void pick($, w.id)}>
+            <Text color={g.color}>{GROUP_MARK[g.key]}</Text>
+            {isOpen ? (
+              <Text size="heading" weight="bold">{` ${w.parentId ? '↳ ' : ''}${w.title}`}</Text>
+            ) : (
+              <Text>{` ${w.parentId ? '↳ ' : ''}${w.title}`}</Text>
+            )}
+          </Button>
+          <Box flexDirection="row" gap={1} paddingLeft={2}>
+            <Text dimColor>
+              {r.name}
+              {w.prNumber ? ` · PR ${w.prNumber}` : ''}
+            </Text>
+            {openIcon(w)}
+            {g.key === 'done' && seenIcon(w)}
+          </Box>
+          {isOpen && accordion(w, r)}
+        </Box>
+      )
+    }
     const lists = (
       <Box flexDirection="column" gap={1}>
         {groups.map(g => (
@@ -397,39 +534,13 @@ export const register: Register = on => {
                   {r.prNumbers.length ? `  PR ${r.prNumbers.join(', ')}` : ''}
                   {r.homeCount ? `  · вдома: ${r.homeCount}` : ''}
                 </Text>
-                {r.workers.map(row)}
+                {r.workers.map(w => row(w, r))}
               </Box>
             ))}
           </Box>
         )}
 
-        {/* the card goes last, below the drawing: opening it must not push the picture down */}
-        {chosen && (
-          <Box flexDirection="column" borderStyle="round" paddingX={1}>
-            <Text bold>{chosen.w.title}</Text>
-            <Text dimColor>
-              {chosen.r.name}
-              {chosen.w.prNumber ? ` · PR ${chosen.w.prNumber}` : ''} · {WORD[chosen.w.kind]}, {ago(chosen.w.activityAt, now)}
-              {chosen.w.parentId ? ' · стажер' : ''}
-            </Text>
-            <Box flexDirection="row" gap={1}>
-              {e.surface !== 'mobile' && (
-                <Button key="go-chat" variant="primary" onPress={() => void openChat($, chosen.w.link)}>
-                  Перейти в чат
-                </Button>
-              )}
-              {chosen.w.kind === 'wait' && (
-                <Button key="card-ack" onPress={() => void seen($, [chosen.w.id])}>
-                  ок, бачив
-                </Button>
-              )}
-              <Button key="card-close" plain onPress={() => void pick($, chosen.w.id)}>
-                закрити
-              </Button>
-            </Box>
-            {v.note && <Text color="red">{v.note}</Text>}
-          </Box>
-        )}
+        {v.note && <Text color="red">{v.note}</Text>}
       </Box>
     )
   })

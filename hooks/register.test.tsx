@@ -37,8 +37,39 @@ const OWN = {
   link: 'claude://x/me',
 }
 
-// how many times the session list was read
+// how many times the session list was read, and what was run on the host
 let polls = 0
+const runs: string[][] = []
+
+const DISK = JSON.stringify({
+  meta: {
+    cliSessionId: 'x',
+    model: 'claude-sonnet-5-5',
+    effort: 'xhigh',
+    permissionMode: 'auto',
+    createdAt: String(Date.now() - 3 * 3600000),
+    lastTurnEdgeAt: String(Date.now() - 12 * 60000),
+    completedTurns: '13',
+  },
+  cost: JSON.stringify({
+    type: 'cost-state',
+    totalCostUSD: 1.17,
+    totalAPIDuration: 216033,
+    totalToolDuration: 20973,
+    totalDuration: 2765630,
+    totalLinesAdded: 96,
+    totalLinesRemoved: 36,
+    modelUsage: {
+      'claude-sonnet-5-5': {
+        inputTokens: 90,
+        outputTokens: 23573,
+        thinkingTokens: 10165,
+        cacheReadInputTokens: 4807590,
+        cacheCreationInputTokens: 113531,
+      },
+    },
+  }),
+})
 
 // What the engine does beneath the mod, answered one by one; the poll reads the session list through mcp.call.
 const engine = ($: any, on: any) => {
@@ -53,16 +84,23 @@ const engine = ($: any, on: any) => {
   }))
   // the registry of running chats: session b is blocked on the person
   on('fs.list', () => ({ value: [{ name: '1.json', kind: 'file' }, { name: '1.key', kind: 'file' }] }))
-  on('fs.read', () => ({ value: JSON.stringify({ status: 'waiting', hostSessionId: 'b' }) }))
+  on('fs.read', () => ({ value: JSON.stringify({ status: 'waiting', hostSessionId: 'b', statusUpdatedAt: Date.now() - 7 * 60000 }) }))
   // like the app: list_sessions leaves out the session that asks; get_session answers for it
   on('mcp.call', (_: unknown, e: any) => {
     if (e.tool === 'list_sessions') polls++
-    return {
-      value: {
-        content: [{ type: 'text', text: JSON.stringify(e.tool === 'get_session' ? OWN : SESSIONS) }],
-        isError: false,
-      },
-    }
+    const answer =
+      e.tool === 'get_session'
+        ? { ...OWN, branch: 'feature/x', model: 'claude-sonnet-5-5', effort: 'high' }
+        : e.tool === 'get_usage'
+          ? { context: { status: 'ok', tokensUsed: 224000, contextWindow: 1000000, percentUsed: 22 } }
+          : SESSIONS
+    return { value: { content: [{ type: 'text', text: JSON.stringify(answer) }], isError: false } }
+  })
+  // the script that reads what the app keeps on disk, and the command that opens a chat
+  on('process.run', (_: unknown, e: any) => {
+    runs.push([...e.argv])
+    const stdout = e.argv[0] === 'powershell' ? DISK : ''
+    return { value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
 }
 
@@ -84,19 +122,58 @@ test('the desktop pane draws the office as one scene with the room names as butt
   await ui.unmount()
 })
 
-test('pressing a worker shows its card; pressing a room shows that room alone', async ($, on) => {
+test('pressing a worker opens its accordion, pressing it again closes it; pressing a room shows that room alone', async ($, on) => {
   await started($, on)
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
 
-  expect(await ui.find({ type: 'Button', text: /Перейти в чат/ })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: /Вартість/ })).toBeUndefined()
   await ui.press({ key: 'hit-a-0' })
-  expect((await ui.find({ type: 'Text', text: /Chat A/ }))?.text).toContain('Chat A')
-  expect(await ui.find({ type: 'Button', text: /Перейти в чат/ })).toBeDefined()
-  await ui.press({ key: 'card-close' })
-  expect(await ui.find({ type: 'Button', text: /Перейти в чат/ })).toBeUndefined()
+  await new Promise(r => (globalThis as any).setTimeout(r, 200))
+  expect(await ui.find({ type: 'Text', text: /Вартість/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^\$1\.17$/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /вихід 23\.6k · вхід 90 · міркування 10\.2k/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /224k з 1M · 22%/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /feature\/x/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /працює · 12 хв/ })).toBeDefined()
+  // the title is the name alone: the group already says the state
+  expect((await ui.find({ type: 'Button', text: /Chat A/ }))?.text).not.toMatch(/працює|хв/)
+
+  await ui.press({ key: 'pick-a' })
+  expect(await ui.find({ type: 'Text', text: /Вартість/ })).toBeUndefined()
 
   await ui.press({ key: 'room-d:/work/my project' })
   expect(await ui.find({ type: 'Button', text: /Весь офіс/ })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('a session that waits for an answer shows for how long', async ($, on) => {
+  await started($, on)
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+
+  await ui.press({ key: 'pick-b' })
+  await new Promise(r => (globalThis as any).setTimeout(r, 200))
+  expect(await ui.find({ type: 'Text', text: /чекає відповіді · 7 хв/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('each row has an arrow that opens its chat, with a tooltip', async ($, on) => {
+  await started($, on)
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+
+  const icons = (await ui.findAll({ type: 'Svg' })).filter((x: any) => x.props.source.includes('<title>Перейти в чат</title>'))
+  expect(icons.length).toBeGreaterThan(0)
+  runs.length = 0
+  await ui.press({ key: 'go-a' })
+  await new Promise(r => (globalThis as any).setTimeout(r, 50))
+  expect(runs.some(c => c.includes('claude://x/a'))).toBe(true)
+  await ui.unmount()
+})
+
+test('there is no bare "ок" button: a finished session gets a tick icon instead', async ($, on) => {
+  await started($, on)
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+
+  expect(await ui.find({ type: 'Button', text: /^ок$/ })).toBeUndefined()
   await ui.unmount()
 })
 
@@ -125,8 +202,8 @@ test('the desktop list has the groups, each session with its project under the t
   expect(await ui.find({ type: 'Text', text: /Потребують відповіді · 1/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /У роботі · 2/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /Завершені, чекають/ })).toBeUndefined()
-  expect(await ui.find({ type: 'Button', text: /Chat B/ })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: /чекає відповіді/ })).toBeDefined()
+  // the title is the name alone (no state, no time); the project, and the PR if any, is under it
+  expect((await ui.find({ type: 'Button', text: /Chat B/ }))?.text).not.toMatch(/чекає|працює|хв/)
   expect(await ui.find({ type: 'Text', text: /my project · PR 34/ })).toBeDefined()
   await ui.unmount()
 })

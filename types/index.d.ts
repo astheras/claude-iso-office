@@ -12,6 +12,8 @@ export type RawSession = {
   link?: string
   /** the session is blocked on the person (a permission or a question); not in list_sessions, read from the registry */
   needsAnswer?: boolean
+  /** when the chat started to wait for the person (ms), from the registry */
+  askedAt?: number
 }
 
 /** work: running now. wait: finished lately and not yet looked at. rest: idle. home: idle over a day. */
@@ -30,6 +32,7 @@ export type Worker = {
   prNumber?: number
   /** blocked on the person: listed first, whatever its kind */
   needsAnswer?: boolean
+  askedAt?: number
   /** a session started from another one that is in the list: drawn as an intern */
   parentId?: string
 }
@@ -57,6 +60,43 @@ export type Memory = {
   >
 }
 
+/** What the accordion of a chosen chat shows; every field is optional, a missing one is left out of the rows. */
+export type Detail = {
+  model?: string
+  effort?: string
+  permissionMode?: string
+  branch?: string
+  cwd?: string
+  prState?: string
+  prNumber?: number
+  /** ms since the epoch */
+  createdAt?: number
+  /** the last turn started or ended: for a running chat, when its turn began */
+  turnEdgeAt?: number
+  turns?: number
+  /** spent so far, in US dollars, as of the last finished turn */
+  costUSD?: number
+  /** a model in the chat has no price on record: the cost is at least this */
+  costPartial?: boolean
+  tokens?: { input: number; output: number; thinking: number; cacheRead: number; cacheWrite: number }
+  apiMs?: number
+  toolMs?: number
+  wallMs?: number
+  linesAdded?: number
+  linesRemoved?: number
+  /** how full the context window is (only for a chat whose process is up) */
+  context?: { used: number; window: number; percent: number }
+}
+
+/** The chosen chat's details, as last fetched. */
+export type DetailState = {
+  id: string
+  at: number
+  /** a fetch is under way */
+  loading: boolean
+  data?: Detail
+}
+
 /** What the pane shows: one room or all, and the picked worker. */
 export type View = {
   /** room key, or '' for the whole office */
@@ -78,6 +118,6 @@ export type Office = {
 
 declare module 'claude-code' {
   interface PluginState {
-    'iso-office': { memory: Shaped<Memory>; office: Shaped<Office>; view: Shaped<View> }
+    'iso-office': { memory: Shaped<Memory>; office: Shaped<Office>; view: Shaped<View>; detail: Shaped<DetailState> }
   }
 }

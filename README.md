@@ -8,7 +8,8 @@ An isometric mini-office for the Claude Code desktop app. Every project folder i
 - **Sessions that just finished** stand at their desk with a raised hand and a "!" until you look at them. The **ок** ("ok") button, or **усі побачені** ("all seen"), clears it.
 - **Idle sessions** leave their desk: they walk to the coffee machine, chat in pairs or sit on the sofa. When a session changes state, the worker walks between the desk and the break area.
 - **Sessions idle for more than a day** go home: they are counted on the room's label instead of being drawn.
-- **Click a worker** to see a card with the name of the chat, its project, PR and state, and a **Перейти в чат** ("Go to chat") button that opens that chat.
+- **Click a worker** (or its title in the list below) to open an accordion under that chat: its state and how long it has lasted, what it cost, its tokens, the context fill, the model, the number of turns, how long it has run, the code it changed, the branch, the PR and the folder. Click again to close it. Cost and tokens are as of the end of the last turn.
+- **The arrow** after a chat's project name opens that chat (its tooltip reads **Перейти в чат**, "Go to chat"). A finished session also has a tick that marks it as seen.
 - **Click a room's name** (or its button at the top) to look at that room alone, larger.
 - **Under the picture** the sessions are listed in groups, each with a title and its project name under it: **needs an answer** (orange), **in progress** (soft blue), **finished, waiting** (soft green). When a room is chosen at the top, only its sessions are listed.
 
@@ -47,7 +48,8 @@ This is a **Claude Code** plugin, not a general tool. It uses Claude Code's plug
 
 - It needs the **Claude Code desktop app** (it reads `list_sessions` from the app's session-management tools). In a plain terminal there is no picture, only a text roster.
 - The interface text is in Ukrainian. The strings are in `hooks/data.ts` and `hooks/register.tsx`.
-- **Перейти в чат** runs `cmd /c start` on the chat's `claude://` link, so it works on **Windows** only.
+- The arrow that opens a chat runs `cmd /c start` on the chat's `claude://` link, so it works on **Windows** only.
+- The accordion's cost, tokens and turn count are read from the app's own files (the chat's record under `Claude-Data` and the last `cost-state` line of its transcript in `~/.claude/projects`) by a short PowerShell run, also **Windows** only. If a file cannot be read, those lines are left out; the rest still shows.
 - The click areas over the picture are placed in the pane's character cells, measured for the default desktop font (a cell is about 7.5 px wide and 20 px tall). With another font size they can be off; `/office debug` shows where they are.
 - The app does not tell a plugin that a session is waiting for you. "Finished, waiting" means: it was running, then stopped, and you have not pressed **ок** yet (it fades after 30 minutes).
 - "Needs an answer" is read from the status that each running chat keeps in `~/.claude/sessions/*.json` (`waiting`: a permission or a question). If that file cannot be read, the group stays empty and nothing else changes.
