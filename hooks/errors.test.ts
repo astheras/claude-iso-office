@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import type { ErrorCache, RawSession } from '../types'
-import { errorLabel, errorOf, errorsScript, needsCheck, nextCache, parseErrors } from './errors'
+import { errorLabel, errorOf, errorsScript, isAsk, needsCheck, nextCache, parseErrors, parsePeers, peerOf, waitOf } from './errors'
 
 const NOW = Date.parse('2026-11-13T12:00:00Z')
 const iso = (msAgo: number) => new Date(NOW - msAgo).toISOString()
@@ -86,4 +86,52 @@ test('the script holds no double quote, carries the ids and takes only plain ids
   expect(script).toContain("@('local_a','local_b-2')")
   expect(script.includes('"')).toBe(false)
   expect(() => errorsScript(["x'; Remove-Item *"])).toThrow()
+})
+
+// the messages the two Unity sessions really sent each other (shortened)
+const REAL_ASK_UK = 'Питання по Editor: мені потрібне вікно ≈15 хв для ХБ.7: Refresh + EditMode + пара прогонів стенду. Якщо ти зараз у Play, скажи, коли звільниться. Якщо вільно, напиши «вільно».'
+const REAL_ASK_EN = 'Your xb4-a and xb4-b files are both in Logs/CitySimulationStand, and the editor shows not Play. Are you done with it? If you still need Play, tell me how long. If you\'re done, write «вільно».'
+const REAL_CLAIM_UK = 'Дякую. Беру Editor зараз: Refresh + компіляція, EditMode, пара прогонів стенду (≈15 хв). Не запускай Run і tests-run, поки я не напишу «вільно».'
+const REAL_CLAIM_EN = "Your xb3-b-168 has finished and the editor is idle, so I'm taking it for about 15 minutes. Don't start Run in the meantime; I'll write when I'm done."
+const REAL_FREE_UK = 'вільно. Мої прогони (xb7-a/b) і EditMode (3241 з 3241) завершено, Editor не в Play і не компілюється. Дякую.'
+const REAL_FREE_EN = "The editor is free again: I'm done with my DR.2 runs. It is not in Play, nothing is compiling and no probes are left in it."
+
+test('a question to a colleague is a wait; taking the editor and giving it back are not', () => {
+  expect([REAL_ASK_UK, REAL_ASK_EN].map(isAsk)).toEqual([true, true])
+  expect([REAL_CLAIM_UK, REAL_CLAIM_EN, REAL_FREE_UK, REAL_FREE_EN].map(isAsk)).toEqual([false, false, false, false])
+})
+
+test('the unanswered request the script found is a wait, for Unity when it is about the editor', () => {
+  const out = parsePeers(
+    JSON.stringify({
+      a: { peerTo: 'Їжа для комплексів', peerId: '', peerAt: '2026-11-13T10:00:00.000Z', peerText: REAL_ASK_UK },
+      b: { peerTo: '', peerId: 'local_peer', peerAt: '2026-11-13T10:00:00.000Z', peerText: 'Чи можна, будь ласка, глянути на PR?' },
+      c: { peerTo: 'x', peerText: REAL_FREE_UK },
+      d: { code: 'server_error', text: 'x' },
+    }),
+  )
+  expect(Object.keys(out)).toEqual(['a', 'b'])
+  expect(out['a']!.to).toBe('Їжа для комплексів')
+  expect(out['b']!.id).toBe('local_peer')
+
+  const listed = [s('food', { title: 'Їжа для комплексів' }), s('local_peer', { title: 'Peer' })]
+  expect(waitOf(out['a']!, listed)).toEqual({ id: 'food', title: 'Їжа для комплексів', on: 'Unity' })
+  // by session id, and about nothing in particular: no "Unity"
+  expect(waitOf(out['b']!, listed)).toEqual({ id: 'local_peer', title: 'Peer' })
+  // a chat that is not in the list is still named as it was addressed
+  expect(waitOf({ to: 'Gone', id: '', text: 'Editor?', at: 0 }, [])).toEqual({ id: 'Gone', title: 'Gone', on: 'Unity' })
+  expect(waitOf({ to: '', id: '', text: '?', at: 0 }, [])).toBeUndefined()
+})
+
+test('a wait is read once per activity and is shown only at that activity', () => {
+  const ask = { to: 'x', id: '', text: 'Editor?', at: 1 }
+  const raw = [s('a', { lastActivityAt: 'T1' })]
+  const cache = nextCache({}, raw, raw, {}, { a: ask })
+  expect(cache['a']).toEqual({ at: 'T1', peer: ask })
+  expect(peerOf(cache, s('a', { lastActivityAt: 'T1' }))).toEqual(ask)
+  expect(peerOf(cache, s('a', { lastActivityAt: 'T2' }))).toBeUndefined()
+})
+
+test('an entry that only holds a request to a colleague is not an error', () => {
+  expect(parseErrors(JSON.stringify({ a: { peerTo: 'x', peerText: 'Editor?' } }))).toEqual({})
 })

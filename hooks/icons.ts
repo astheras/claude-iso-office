@@ -13,6 +13,8 @@ const PATHS = {
   open: 'M10.5 13.5 L19.5 6.5 M13.5 6.5 H19.5 V12.5',
   // a tick: "seen"
   seen: 'M10 10.5 L13.5 14 L20 6.5',
+  // a plus: "a new session in the project"
+  add: 'M15 5.5 V14.5 M10.5 10 H19.5',
 } as const
 
 export type IconKind = keyof typeof PATHS

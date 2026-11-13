@@ -1,6 +1,7 @@
 import type { Detail, Room, Worker } from '../types'
 import { agoText, WORD } from './data'
 import { errorLabel } from './errors'
+import { PLAN_MARK, planCount, planFrom } from './plan'
 
 /** How long, to the minute; seconds only when short. */
 export const lasting = (ms: number): string => {
@@ -55,7 +56,7 @@ export function detailScript(sessionId: string): string {
     '[Console]::OutputEncoding = [Text.Encoding]::UTF8',
     `$id = '${sessionId}'`,
     '$q = [char]34',
-    '$res = @{ meta = $null; cost = $null }',
+    '$res = @{ meta = $null; cost = $null; plan = $null }',
     "$mp = $env:LOCALAPPDATA + '\\Claude-Data\\*\\claude-code-sessions\\*\\*\\' + $id + '.json'",
     '$m = Get-ChildItem -Path $mp -File | Select-Object -First 1',
     'if ($m) {',
@@ -68,6 +69,9 @@ export function detailScript(sessionId: string): string {
     "    $pat = '{' + $q + 'type' + $q + ':' + $q + 'cost-state' + $q",
     '    $l = Select-String -LiteralPath $t.FullName -Pattern $pat -SimpleMatch | Select-Object -Last 1',
     '    if ($l) { $res.cost = $l.Line }',
+    // the task-list calls: the chat's own messages are short lines; the long ones are copies of what went to the model
+    "    $pp = @(($q + 'name' + $q + ':' + $q + 'mcp__ccd_turn__update_plan' + $q), ($q + 'name' + $q + ':' + $q + 'mcp__ccd_turn__wrap_up' + $q))",
+    '    $res.plan = @(Select-String -LiteralPath $t.FullName -Pattern $pp -SimpleMatch | Where-Object { $_.Line.Length -lt 60000 } | Select-Object -Last 150 | ForEach-Object { $_.Line })',
     '  }',
     '}',
     'ConvertTo-Json -InputObject $res -Compress',
@@ -77,7 +81,7 @@ export function detailScript(sessionId: string): string {
 /** What detailScript printed, as far as it is readable; anything else is an empty answer, never an error. */
 export function parseDetail(stdout: string): Detail {
   const out: Detail = {}
-  let top: { meta?: Record<string, unknown> | null; cost?: unknown }
+  let top: { meta?: Record<string, unknown> | null; cost?: unknown; plan?: unknown }
   try {
     top = JSON.parse(stdout)
   } catch {
@@ -127,6 +131,10 @@ export function parseDetail(stdout: string): Detail {
       // a cut or odd line: no cost, nothing else lost
     }
   }
+  // one line comes back as a bare string, more as a list
+  const lines = typeof top.plan === 'string' ? [top.plan] : Array.isArray(top.plan) ? top.plan.filter(x => typeof x === 'string') : []
+  const plan = planFrom(lines)
+  if (plan) out.plan = plan
   return out
 }
 
@@ -139,9 +147,15 @@ export function detailRows(w: Worker, room: Room, d: Detail | undefined, now: nu
     if (value) rows.push(tone ? [label, value, tone] : [label, value])
   }
   add('Стан', `${stateWord(w)} · ${lasting(now - stateSince(w, d))}`, w.error ? 'bad' : undefined)
+  if (w.waitsFor?.length) add('Чекає', w.waitsFor.map(waitText).join('; '))
   if (w.error) {
     add('Помилка', errorLabel(w.error), 'bad')
     add('Повідомлення', w.error.text.length > 200 ? `${w.error.text.slice(0, 200)}…` : w.error.text, 'bad')
+  }
+  if (d?.plan) {
+    const { done, total } = planCount(d.plan)
+    add('План', `${done} з ${total}`)
+    for (const p of d.plan) add(PLAN_MARK[p.status], p.text)
   }
   if (d) {
     if (d.costUSD !== undefined) add('Вартість', `${d.costPartial ? '≥ ' : ''}${dollars(d.costUSD)}`)
@@ -177,4 +191,15 @@ export function detailRows(w: Worker, room: Room, d: Detail | undefined, now: nu
 }
 
 /** The word for the group a chat is listed in, for the "state" line. */
-export const stateWord = (w: Worker): string => (w.error ? 'помилка' : w.needsAnswer ? 'чекає відповіді' : WORD[w.kind])
+export const stateWord = (w: Worker): string =>
+  w.error ? 'помилка' : w.needsAnswer ? 'чекає відповіді' : w.waitsFor ? 'чекає іншого агента' : WORD[w.kind]
+
+/** One thing a chat waits for: «Unity (Їжа для комплексів)», or just the chat's title. */
+export const waitText = (x: { title: string; on?: string }): string => (x.on ? `${x.on} (${x.title})` : x.title)
+
+/** What a chat waits for, in a line: the first one, and how many more. */
+export const waitsText = (w: Worker): string | undefined => {
+  if (!w.waitsFor?.length) return undefined
+  const [first, ...more] = w.waitsFor
+  return `${waitText(first!)}${more.length ? ` і ще ${more.length}` : ''}`
+}

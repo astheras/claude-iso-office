@@ -19,8 +19,19 @@ export const SIZE_LIMIT = 120_000
 
 /** A clickable place on the scene: a worker's torso, in scene px. */
 export type Spot = { id: string; x: number; y: number }
-/** Where a room's name goes, in scene px (the pane draws it as real text over the scene). */
-export type Label = { key: string; name: string; sub: string; x: number; y: number }
+/**
+ * Where a room's name goes, in scene px (the pane draws it as real text over the scene, with the «+» that starts a new
+ * session in the project beside it).
+ */
+export type Label = {
+  key: string
+  name: string
+  sub: string
+  x: number
+  y: number
+  /** the scene is on a dark ground: the pane draws the name in light colours, whatever the theme of the pane */
+  dark?: true
+}
 
 export type FloorScene = {
   svg: string
@@ -31,6 +42,9 @@ export type FloorScene = {
   spots: Spot[]
   labels: Label[]
 }
+
+/** What a theme gives the pane: the drawing, where the figures are to be pressed, and where the names go. */
+export type Scene = FloorScene
 
 type Item = { d: number; svg: string }
 type Slot = 'talk0' | 'talk1' | 'talk2' | 'talk3' | 'coffee0' | 'coffee1' | 'couch0' | 'couch1'

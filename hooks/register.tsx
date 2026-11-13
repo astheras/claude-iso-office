@@ -1,12 +1,15 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, Timer } from 'claude-code'
 
-import type { Detail, DetailState, ErrorCache, Memory, Office, RawSession, Room, View, Worker } from '../types'
+import type { Detail, DetailState, ErrorCache, Memory, Office, RawSession, Room, SketchCache, View, Worker } from '../types'
 import { ack, ago, agoText, classify, emptyMemory, groupSessions, parseSessions, RED, summary, WORD } from './data'
 import type { Group } from './data'
-import { detailRows, detailScript, parseDetail } from './detail'
-import { errorLabel, errorOf, errorsScript, needsCheck, nextCache, parseErrors } from './errors'
+import { detailRows, detailScript, parseDetail, waitsText } from './detail'
+import { errorLabel, errorOf, errorsScript, needsCheck, nextCache, parseErrors, parsePeers, peerOf, waitOf } from './errors'
 import { floorSvg } from './floor'
+import { galaxySvg, REST_COLOR } from './galaxy'
+import { planProgress } from './plan'
+import { needsSketch, nextSketches, parseSketches, sketchLook, sketchScript, withSketches } from './sketch'
 import type { Label, Spot } from './floor'
 import { ICON_H, ICON_W, iconSvg } from './icons'
 import type { IconKind } from './icons'
@@ -39,6 +42,9 @@ const detail = atom({ plugin: 'iso-office', key: 'detail' } as const, { id: '', 
 // which chats have been read for an error, and when: a transcript is read once per activity, not once per poll
 const errors = atom({ plugin: 'iso-office', key: 'errors' } as const, {} as ErrorCache, { shape: 'errors-1' })
 
+// what has been read of each chat's transcript so far: its task list and its tokens, for the galaxies
+const sketches = atom({ plugin: 'iso-office', key: 'sketches' } as const, {} as SketchCache, { shape: 'sketches-2' })
+
 // the open chat's details are fetched again when older than this (cost moves at the end of each turn)
 const DETAIL_TTL_MS = 30000
 
@@ -56,6 +62,9 @@ let lastStatus = ''
 // when each chat's details were last fetched: kept here, not in the pane's state, which would redraw it at every fetch
 const detailFetchedAt = new Map<string, number>()
 let isCheckingErrors = false
+let isSketching = false
+// when each chat's transcript was last read for its task list: a running chat is not read at every poll
+const sketchReadAt = new Map<string, number>()
 let lastRenderPollAt = 0
 let pollStartedAt = 0
 let lastPollAt = 0
@@ -138,25 +147,64 @@ async function refreshErrors($: EngineInterface, listed: RawSession[], cache: Er
   isCheckingErrors = true
   try {
     let found: ReturnType<typeof parseErrors> = {}
+    let asks: ReturnType<typeof parsePeers> = {}
     if (todo.length > 0) {
       try {
         const r = await $.process.run(['powershell', '-NoProfile', '-NonInteractive', '-Command', errorsScript(todo.map(s => s.sessionId))], {
           timeoutMs: 30000,
         })
-        if (r.exitCode === 0) found = parseErrors(r.stdout)
+        if (r.exitCode === 0) {
+          found = parseErrors(r.stdout)
+          asks = parsePeers(r.stdout)
+        }
       } catch {
         // no shell, or it timed out: nothing found
       }
     }
-    const merged = nextCache(cache, listed, todo, found)
+    const merged = nextCache(cache, listed, todo, found, asks)
     if (JSON.stringify(merged) !== JSON.stringify(cache)) {
       await update($, errors, () => merged)
-      // an error found (or cleared) changes what the poll shows
-      const failedIn = (c: ErrorCache) => JSON.stringify(Object.entries(c).filter(([, e]) => e.error).map(([id, e]) => [id, e.at]).sort())
+      // an error or a wait found (or cleared) changes what the poll shows
+      const failedIn = (c: ErrorCache) =>
+        JSON.stringify(Object.entries(c).filter(([, e]) => e.error || e.peer).map(([id, e]) => [id, e.at, !!e.error, !!e.peer]).sort())
       if (failedIn(merged) !== failedIn(cache)) void poll($)
     }
   } finally {
     isCheckingErrors = false
+  }
+}
+
+/**
+ * Reads the transcripts of the chats on screen for their task list and tokens, each from where the last read stopped. One
+ * PowerShell run for all, off the poll's way: when what it found changes the drawing, the poll is made again to show it.
+ * A chat not read to the end is read on at the next poll.
+ */
+async function refreshSketches($: EngineInterface, listed: RawSession[], cache: SketchCache) {
+  if (isSketching) return
+  const now = Date.now()
+  const todo = needsSketch(listed, cache, now, sketchReadAt)
+  const hasGone = Object.keys(nextSketches(cache, listed, [], {})).length !== Object.keys(cache).length
+  if (todo.length === 0 && !hasGone) return
+  isSketching = true
+  try {
+    let found: ReturnType<typeof parseSketches> = {}
+    if (todo.length > 0) {
+      for (const s of todo) sketchReadAt.set(s.sessionId, now)
+      try {
+        const items = todo.map(s => ({ id: s.sessionId, offset: cache[s.sessionId]?.offset ?? 0 }))
+        const r = await $.process.run(['powershell', '-NoProfile', '-NonInteractive', '-Command', sketchScript(items)], { timeoutMs: 40000 })
+        if (r.exitCode === 0) found = parseSketches(r.stdout)
+      } catch {
+        // no shell, a session id it would not take, or it timed out: nothing found
+      }
+    }
+    const merged = nextSketches(cache, listed, todo, found)
+    if (JSON.stringify(merged) !== JSON.stringify(cache)) {
+      await update($, sketches, () => merged)
+      if (sketchLook(merged) !== sketchLook(cache)) void poll($)
+    }
+  } finally {
+    isSketching = false
   }
 }
 
@@ -176,11 +224,15 @@ async function poll($: EngineInterface) {
     const listed = parseSessions(textOf(r.content))
     if (own && !listed.some(s => s.sessionId === own.sessionId)) listed.push(own)
     const failed = await read($, errors)
-    const raw = listed.map(s => {
+    const seenSketches = await read($, sketches)
+    const raw = withSketches(listed, seenSketches).map(s => {
       const since = asking.get(s.sessionId)
       const error = errorOf(failed, s)
+      const ask = peerOf(failed, s)
+      const asked = ask && !s.isRunning ? waitOf(ask, listed) : undefined
       return {
         ...s,
+        ...(asked ? { waitsFor: [asked] } : {}),
         ...(since === undefined ? {} : { needsAnswer: true, ...(since ? { askedAt: since } : {}) }),
         ...(error ? { error } : {}),
       }
@@ -203,6 +255,7 @@ async function poll($: EngineInterface) {
       void $.ui.status(status)
     }
     void refreshErrors($, listed, failed)
+    void refreshSketches($, listed, seenSketches)
 
     // the open chat's accordion: fetched again when it is not the chat held, or when its numbers have grown old
     // (a fetch that has not finished in that time is taken for lost, and is made again)
@@ -248,9 +301,9 @@ function pollSoon($: EngineInterface) {
 const open = ($: EngineInterface) => $.ui.open({ id: PANE, title: TITLE })
 
 const MARK = { work: '▶', wait: '!', rest: '·', home: '' } as const
-const GROUP_MARK = { err: '✕', ask: '?', work: '▶', done: '!' } as const
+const GROUP_MARK = { err: '✕', ask: '?', agent: '…', work: '▶', done: '!', rest: '·' } as const
 // icons as plain glyphs, where there is no drawing to hold their tooltips
-const GLYPH: Record<IconKind, string> = { open: '↗', seen: '✓' }
+const GLYPH: Record<IconKind, string> = { open: '↗', seen: '✓', add: '+' }
 
 async function seen($: EngineInterface, ids: string[]) {
   await update($, memory, m => ids.reduce((acc, id) => ack(acc, id), m) as Memory)
@@ -335,6 +388,35 @@ async function pick($: EngineInterface, id: string) {
 
 const goRoom = ($: EngineInterface, key: string) => update($, view, v => ({ ...v, room: key, note: '' }))
 
+/**
+ * The link that opens a new session in a folder: the app's own `claude://code/new?folder=…`, the one its «New Claude Code
+ * Session» menu entry uses. The folder goes as the session gives it (backslashes and all): the app asks whether to trust
+ * a folder it does not know by that very spelling. Nothing but unreserved characters and %XX reaches the shell.
+ */
+const newSessionLink = (folder: string): string =>
+  `claude://code/new?folder=${encodeURIComponent(folder).replace(/[!'()*]/g, c => `%${c.charCodeAt(0).toString(16).toUpperCase()}`)}`
+
+/** Where a «+» can start a session: a project with a folder, and the coworking room. */
+const canStartIn = (room: Room | undefined): room is Room => !!room && ((room.type === 'project' && !!room.cwd) || room.type === 'cowork')
+
+/** Starts a new session in a project's folder: the «+» beside a project's name. The app opens it, ready for the first message. */
+async function newSession($: EngineInterface, room: Room) {
+  // a project is opened in its folder; the coworking room has none, and the app starts a session where it starts one when
+  // it is not told (the link without a folder); a remote office has a folder on another machine: not from here
+  if (!canStartIn(room)) return
+  const link = room.type === 'project' ? newSessionLink(room.cwd!) : 'claude://code/new'
+  if (!/^claude:\/\/code\/new(\?folder=[A-Za-z0-9._~%-]+)?$/.test(link)) {
+    await update($, view, v => ({ ...v, note: 'Не вдалося відкрити нову сесію: тека не розпізнана.' }))
+    return
+  }
+  try {
+    const r = await $.process.run(['cmd', '/c', 'start', '', link])
+    await update($, view, v => ({ ...v, note: r.exitCode === 0 ? '' : `Не вдалося відкрити нову сесію (код ${r.exitCode}).` }))
+  } catch (err) {
+    await update($, view, v => ({ ...v, note: `Не вдалося відкрити нову сесію: ${String(err).slice(0, 100)}` }))
+  }
+}
+
 /** Opens a chat through the system's handler for its claude:// link, the way a click on the link would. */
 async function openChat($: EngineInterface, link: string) {
   if (!/^claude:\/\/[A-Za-z0-9._\/-]+$/.test(link)) {
@@ -353,7 +435,7 @@ const waiting = (rooms: Room[]) => rooms.flatMap(r => r.workers.filter(w => w.ki
 
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
-    await $.command.register({ name: 'office', description: 'Office pane: /office [mute|unmute|seen]' })
+    await $.command.register({ name: 'office', description: 'Office pane: /office [mute|unmute|seen|theme [office|galaxy]]' })
     void open($)
     lastRenderPollAt = 0
     void poll($)
@@ -382,6 +464,14 @@ export const register: Register = on => {
       const next = !(await read($, view)).debug
       await update($, view, v => ({ ...v, debug: next }))
       return { text: next ? 'Click areas are shown.' : 'Click areas are hidden.' }
+    }
+    if (arg === 'theme' || arg.startsWith('theme ')) {
+      const asked = arg.slice(5).trim()
+      if (asked !== '' && asked !== 'office' && asked !== 'galaxy') return { text: 'Themes: office, galaxy. /office theme alone switches.' }
+      const now = (await read($, view)).theme ?? 'office'
+      const next = asked === 'office' || asked === 'galaxy' ? asked : now === 'galaxy' ? 'office' : 'galaxy'
+      await update($, view, v => ({ ...v, theme: next }))
+      return { text: next === 'galaxy' ? 'Theme: galaxies.' : 'Theme: office.' }
     }
     if (arg === 'seen') {
       const ids = waiting((await read($, office)).rooms).map(w => w.id)
@@ -415,7 +505,8 @@ export const register: Register = on => {
     const room = active.find(r => r.key === v.room)
     const shown = room ? [room] : active
     const quiet = o.rooms.length - active.length
-    const scene = Svg && shown.length > 0 ? floorSvg(shown, now, v.selected) : undefined
+    const isGalaxy = v.theme === 'galaxy'
+    const scene = Svg && shown.length > 0 ? (isGalaxy ? galaxySvg(shown, now, v.selected) : floorSvg(shown, now, v.selected)) : undefined
     const count = (k: Worker['kind']) => shown.reduce((n, r) => n + r.workers.filter(w => w.kind === k).length, 0)
 
     const ds = await read($, detail)
@@ -469,6 +560,7 @@ export const register: Register = on => {
           <Button key={`pick-${w.id}`} plain dimColor={w.kind === 'rest'} onPress={() => void pick($, w.id)}>
             {MARK[w.kind]} {w.parentId ? '↳ ' : ''}
             {w.title} — {w.error ? `помилка: ${errorLabel(w.error)}` : WORD[w.kind]}, {ago(w.activityAt, now)}
+            {w.plan && w.plan.length > 0 ? ` · план ${planProgress(w.plan)}` : ''}
           </Button>
           {openIcon(w)}
           {w.kind === 'wait' && seenIcon(w)}
@@ -480,7 +572,7 @@ export const register: Register = on => {
     // below the drawing: sessions in three lists, a title and, under it, the project; only the chosen project when one is.
     // The title is just the name (the group already says the state); the chosen one is bigger and bold.
     const groups = groupSessions(shown)
-    const item = (g: Group, { w, room: r }: Group['items'][number]) => {
+    const item = (g: { key: keyof typeof GROUP_MARK; color: string }, { w, room: r }: Group['items'][number]) => {
       const isOpen = w.id === v.selected
       return (
         <Box flexDirection="column">
@@ -497,14 +589,22 @@ export const register: Register = on => {
               {r.name}
               {w.prNumber ? ` · PR ${w.prNumber}` : ''}
             </Text>
+            {w.plan && w.plan.length > 0 && <Text dimColor>{`план ${planProgress(w.plan)}`}</Text>}
             {w.error && <Text color={RED}>{`${errorLabel(w.error)} · ${agoText(w.error.at, now)}`}</Text>}
             {openIcon(w)}
             {g.key === 'done' && seenIcon(w)}
           </Box>
+          {waitsText(w) && !w.error && !w.needsAnswer && (
+            <Box paddingLeft={2}>
+              <Text color={g.color}>{`чекає: ${waitsText(w)}`}</Text>
+            </Box>
+          )}
           {isOpen && accordion(w, r)}
         </Box>
       )
     }
+    const inLists = new Set(groups.flatMap(g => g.items.map(x => x.w.id)))
+    const chosenIdle = shown.flatMap(r => r.workers.map(w => ({ w, room: r }))).find(x => x.w.id === v.selected && !inLists.has(x.w.id))
     const lists = (
       <Box flexDirection="column" gap={1}>
         {groups.map(g => (
@@ -515,7 +615,16 @@ export const register: Register = on => {
             {g.items.map(x => item(g, x))}
           </Box>
         ))}
-        {groups.length === 0 && <Text dimColor>Немає сесій у роботі чи тих, що чекають.</Text>}
+        {/* a session that merely idles is in no list, yet it can be pressed in the picture: its data open here */}
+        {chosenIdle && (
+          <Box flexDirection="column">
+            <Text bold color={REST_COLOR}>
+              Простоює · обрана
+            </Text>
+            {item({ key: 'rest', color: REST_COLOR }, chosenIdle)}
+          </Box>
+        )}
+        {groups.length === 0 && !chosenIdle && <Text dimColor>Немає сесій у роботі чи тих, що чекають.</Text>}
       </Box>
     )
 
@@ -537,14 +646,25 @@ export const register: Register = on => {
       </Box>
     )
 
-    const tag = (lb: Label) => (
-      <Box position="absolute" top={Math.max(0, cellY(lb.y))} left={cellX(lb.x)} flexDirection="column">
-        <Button key={`room-${lb.key}`} plain onPress={() => void goRoom($, v.room === lb.key ? '' : lb.key)}>
-          {lb.name}
-        </Button>
-        {lb.sub && <Text dimColor>{lb.sub}</Text>}
-      </Box>
-    )
+    // a name the drawing writes itself (the galaxies, on a dark sky) is pressed through an invisible button of its width
+    // the «+» after a name starts a new session in the project. Both are real text of the pane, so that what is pressed is
+    // what is seen; on a dark picture (the galaxies) they are drawn in light colours, as the pane's own would not read
+    const LIGHT = '#DCE8FF'
+    const tag = (lb: Label) => {
+      const project = shown.find(r => r.key === lb.key)
+      const canAdd = canStartIn(project)
+      return (
+        <Box position="absolute" top={Math.max(0, cellY(lb.y))} left={cellX(lb.x)} flexDirection="column">
+          <Box flexDirection="row" gap={1}>
+            <Button key={`room-${lb.key}`} plain onPress={() => void goRoom($, v.room === lb.key ? '' : lb.key)}>
+              {lb.dark ? <Text bold color={LIGHT}>{lb.name}</Text> : lb.name}
+            </Button>
+            {canAdd && iconButton(`new-${lb.key}`, 'add', 'Нова сесія в проєкті', () => void newSession($, project!))}
+          </Box>
+          {lb.sub && (lb.dark ? <Text color="#8FA3CC">{lb.sub}</Text> : <Text dimColor>{lb.sub}</Text>)}
+        </Box>
+      )
+    }
 
     return (
       <Box flexDirection="column" gap={1}>
@@ -582,7 +702,7 @@ export const register: Register = on => {
             <Box position="relative">
               <Svg
                 source={scene.svg}
-                alt={`Офіс: ${shown.length} кімнат; працюють ${count('work')}, чекають ${count('wait')}, відпочивають ${count('rest')}`}
+                alt={`${isGalaxy ? 'Галактики' : 'Офіс'}: ${shown.length} ${isGalaxy ? 'проєктів' : 'кімнат'}; працюють ${count('work')}, чекають ${count('wait')}, відпочивають ${count('rest')}`}
                 width={slotPx}
                 height={slotH}
                 isInteractive
@@ -590,7 +710,7 @@ export const register: Register = on => {
               {scene.spots.map(hit)}
               {scene.labels.map(tag)}
             </Box>
-            {scene.hiddenRooms > 0 && <Text dimColor>Ще кімнат не показано: {scene.hiddenRooms}</Text>}
+            {scene.hiddenRooms > 0 && <Text dimColor>Ще {isGalaxy ? 'галактик' : 'кімнат'} не показано: {scene.hiddenRooms}</Text>}
             {!room && quiet > 0 && <Text dimColor>Проєктів без активності (усі сесії вдома): {quiet}</Text>}
             {lists}
           </Box>

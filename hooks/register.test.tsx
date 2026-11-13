@@ -14,6 +14,9 @@ const PANE = {
   },
 } as const
 
+// stopped, and its last message to a colleague (chat A) is a question about the Unity editor that nobody has answered
+const D_SESSION = { sessionId: 'd', title: 'Chat D', cwd: 'D:\\work\\my project', isRunning: false, lastActivityAt: new Date().toISOString(), link: 'claude://x/d' }
+
 const SESSIONS = [
   { sessionId: 'a', title: 'Chat A', cwd: 'D:\\work\\my project', isRunning: true, lastActivityAt: new Date().toISOString(), link: 'claude://x/a' },
   {
@@ -28,10 +31,20 @@ const SESSIONS = [
   },
   // stopped and idle: only a failed last reply (read from its transcript) puts it in a group
   { sessionId: 'c', title: 'Chat C', cwd: 'D:\\work\\my project', isRunning: false, lastActivityAt: new Date().toISOString(), link: 'claude://x/c' },
+  D_SESSION,
+  // stopped long enough ago to be idle, not so long as to be sent home: it is in no list
+  { sessionId: 'e', title: 'Chat E', cwd: 'D:\\work\\my project', isRunning: false, lastActivityAt: new Date(Date.now() - 5 * 3600000).toISOString(), link: 'claude://x/e' },
 ]
 
-// what the script that reads transcripts printed: chat c ended on a refused sign-in
+// what the script that reads transcripts printed: chat c ended on a refused sign-in, chat d waits for chat A
+
 const ERRORS = JSON.stringify({
+  d: {
+    peerTo: 'Chat A',
+    peerId: '',
+    peerAt: new Date(Date.now() - 3 * 60000).toISOString(),
+    peerText: 'Питання по Editor: чи вільно? Якщо вільно, напиши «вільно».',
+  },
   c: {
     code: 'authentication_failed',
     status: '403',
@@ -52,8 +65,30 @@ const OWN = {
 // how many times the session list was read, and what was run on the host
 let polls = 0
 const runs: string[][] = []
+// whether the system fails to open a claude:// link (the arrow, the «+»)
+let refuseOpen = false
+
+// a task list of three steps as the transcript holds it: one made, one move on
+const planCall = (input: unknown, id: string) =>
+  JSON.stringify({ isSidechain: false, type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', id, name: 'mcp__ccd_turn__update_plan', input }] } })
+const PLAN_LINES = [
+  planCall({ items: [{ content: 'Read', status: 'in_progress' }, { content: 'Write', status: 'pending' }, { content: 'Test', status: 'pending' }], scope: 'first_task' }, 't1'),
+  planCall({ advance: true }, 't2'),
+]
+// what the script that reads the transcripts in pieces printed: chat a has the list, chat b has no transcript
+const SKETCH = JSON.stringify({
+  a: {
+    from: 0,
+    offset: 500,
+    size: 500,
+    plan: PLAN_LINES,
+    cost: JSON.stringify({ type: 'cost-state', modelUsage: { m: { outputTokens: 60000, cacheReadInputTokens: 3000000 } } }),
+  },
+  b: { none: true },
+})
 
 const DISK = JSON.stringify({
+  plan: PLAN_LINES,
   meta: {
     cliSessionId: 'x',
     model: 'claude-sonnet-5-5',
@@ -112,8 +147,9 @@ const engine = ($: any, on: any) => {
   on('process.run', (_: unknown, e: any) => {
     runs.push([...e.argv])
     // the two scripts it is given: the transcript error read, and the chat details read
-    const stdout = e.argv[0] !== 'powershell' ? '' : String(e.argv[4]).includes('isApiErrorMessage') ? ERRORS : DISK
-    return { value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+    const script = String(e.argv[4])
+    const stdout = e.argv[0] !== 'powershell' ? '' : script.includes('isApiErrorMessage') ? ERRORS : script.includes('$items') ? SKETCH : DISK
+    return { value: { exitCode: refuseOpen && e.argv[0] === 'cmd' ? 1 : 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
 }
 
@@ -276,4 +312,215 @@ test('a transcript is read once per activity, not once per poll', async ($, on) 
   // the pane drew and polled again, yet the chats were already read at this activity
   expect(reads()).toBe(before)
   await ui.unmount()
+})
+
+test('a chat that waits for a colleague for the Unity editor is listed with what it waits for', async ($, on) => {
+  await started($, on)
+  await new Promise(r => (globalThis as any).setTimeout(r, 300))
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+
+  expect(await ui.find({ type: 'Text', text: /^Чекають іншого агента · 1$/ })).toBeDefined()
+  const line: any = await ui.find({ type: 'Text', text: /^чекає: Unity \(Chat A\)$/ })
+  expect(line).toBeDefined()
+  expect(line.props.color).toBe('#A98BE0')
+
+  await ui.press({ key: 'pick-d' })
+  await new Promise(r => (globalThis as any).setTimeout(r, 200))
+  expect(await ui.find({ type: 'Text', text: /^чекає іншого агента · / })).toBeDefined()
+  await ui.unmount()
+})
+
+test('/office theme switches between the office and the galaxies, and says which', async ($, on) => {
+  await started($, on)
+  await new Promise(r => (globalThis as any).setTimeout(r, 300))
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  const scene = async () => String(((await ui.find({ type: 'Svg' })) as any).props.source)
+
+  // the office is the first theme
+  expect(await scene()).toContain('<use href="#se')
+
+  expect((await $.command.run({ command: 'office', args: 'theme' })).text).toBe('Theme: galaxies.')
+  await new Promise(r => (globalThis as any).setTimeout(r, 200))
+  const galaxy = await scene()
+  expect(galaxy).toContain('id="milky"')
+  expect(galaxy).toContain('data-s="a"')
+  expect(galaxy).not.toContain('<use href="#se')
+  expect(await ui.find({ type: 'Svg' })).toBeDefined()
+
+  // a name to the theme, and a wrong one is told off and changes nothing
+  expect((await $.command.run({ command: 'office', args: 'theme sky' })).text).toMatch(/Themes: office, galaxy/)
+  expect((await $.command.run({ command: 'office', args: 'theme galaxy' })).text).toBe('Theme: galaxies.')
+  expect((await $.command.run({ command: 'office', args: 'theme office' })).text).toBe('Theme: office.')
+  await new Promise(r => (globalThis as any).setTimeout(r, 200))
+  expect(await scene()).toContain('<use href="#se')
+  await ui.unmount()
+})
+
+test('in the galaxies a star is pressed like a worker, and a project name like a room', async ($, on) => {
+  await started($, on)
+  await new Promise(r => (globalThis as any).setTimeout(r, 300))
+  await $.command.run({ command: 'office', args: 'theme galaxy' })
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  await new Promise(r => (globalThis as any).setTimeout(r, 200))
+
+  expect(await ui.find({ type: 'Text', text: /Вартість/ })).toBeUndefined()
+  await ui.press({ key: 'hit-a-0' })
+  await new Promise(r => (globalThis as any).setTimeout(r, 200))
+  expect(await ui.find({ type: 'Text', text: /Вартість/ })).toBeDefined()
+  // the accordion says how far the plan has got, and each step
+  expect(await ui.find({ type: 'Text', text: /^1 з 3$/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^Write$/ })).toBeDefined()
+
+  // the project's name is the pane's own light text, a button of its own: what is pressed is what is seen
+  const name: any = await ui.find({ type: 'Text', text: /^my project$/ })
+  expect(name).toBeDefined()
+  expect(name.props.color).toBe('#DCE8FF')
+  expect(await ui.find({ type: 'Button', text: /my project/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('the transcripts are read for the plan of every chat on screen, and the list says how far each has got', async ($, on) => {
+  await started($, on)
+  await new Promise(r => (globalThis as any).setTimeout(r, 400))
+  const reads = () => runs.filter(c => c[0] === 'powershell' && String(c[4]).includes('$items'))
+  expect(reads().length).toBeGreaterThan(0)
+  // the chats that were asked for, each from the start
+  expect(String(reads()[0]![4])).toMatch(/\$items = '(?:[^']*;)?a:0(?:;|')/)
+
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  await new Promise(r => (globalThis as any).setTimeout(r, 200))
+  // chat a is on step two of three: one step done
+  expect(await ui.find({ type: 'Text', text: /^план 1\/3$/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('a chat read to the end is not read again at the next poll', async ($, on) => {
+  await started($, on)
+  await new Promise(r => (globalThis as any).setTimeout(r, 400))
+  const reads = () => runs.filter(c => c[0] === 'powershell' && String(c[4]).includes('$items')).length
+  const before = reads()
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  await new Promise(r => (globalThis as any).setTimeout(r, 300))
+  // a running chat may be read again after twenty seconds, not at once; the stopped ones are read to the end
+  expect(reads()).toBe(before)
+  await ui.unmount()
+})
+
+test('an idle session is in no list, but pressing it in the picture opens its data under the lists', async ($, on) => {
+  await started($, on)
+  await new Promise(r => (globalThis as any).setTimeout(r, 300))
+  await $.command.run({ command: 'office', args: 'theme galaxy' })
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  await new Promise(r => (globalThis as any).setTimeout(r, 200))
+
+  expect(await ui.find({ type: 'Button', text: /Chat E/ })).toBeUndefined()
+  await ui.press({ key: 'hit-e-0' })
+  await new Promise(r => (globalThis as any).setTimeout(r, 300))
+  expect(await ui.find({ type: 'Text', text: /^Простоює · обрана$/ })).toBeDefined()
+  expect(await ui.find({ type: 'Button', text: /Chat E/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /Вартість/ })).toBeDefined()
+
+  // pressed again it closes, and the block goes
+  await ui.press({ key: 'pick-e' })
+  await new Promise(r => (globalThis as any).setTimeout(r, 200))
+  expect(await ui.find({ type: 'Text', text: /^Простоює · обрана$/ })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('the «+» by a project opens a new session in its folder through the app\'s link, in both themes', async ($, on) => {
+  await started($, on)
+  await new Promise(r => (globalThis as any).setTimeout(r, 300))
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  const key = 'new-d:/work/my project'
+  const opened = () => runs.filter(c => c[0] === 'cmd' && c.some(a => a.startsWith('claude://code/new')))
+
+  // it has a tooltip, as the arrow has: an icon with a title
+  const icons = (await ui.findAll({ type: 'Svg' })).filter((x: any) => x.props.source.includes('<title>Нова сесія в проєкті</title>'))
+  expect(icons).toHaveLength(1)
+
+  // the office
+  runs.length = 0
+  await ui.press({ key })
+  await new Promise(r => (globalThis as any).setTimeout(r, 200))
+  expect(opened()).toHaveLength(1)
+  // the folder rides in the link, written so that nothing in it means anything to the shell
+  expect(opened()[0]!.at(-1)).toBe('claude://code/new?folder=D%3A%5Cwork%5Cmy%20project')
+
+  // the galaxies
+  await $.command.run({ command: 'office', args: 'theme galaxy' })
+  await new Promise(r => (globalThis as any).setTimeout(r, 200))
+  expect((await ui.findAll({ type: 'Svg' })).filter((x: any) => x.props.source.includes('<title>Нова сесія в проєкті</title>'))).toHaveLength(1)
+  runs.length = 0
+  await ui.press({ key })
+  await new Promise(r => (globalThis as any).setTimeout(r, 200))
+  expect(opened()).toHaveLength(1)
+  await ui.unmount()
+})
+
+test('a link that did not open is told under the picture, and the next press tries again', async ($, on) => {
+  await started($, on)
+  await new Promise(r => (globalThis as any).setTimeout(r, 300))
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  const key = 'new-d:/work/my project'
+  refuseOpen = true
+  await ui.press({ key })
+  await new Promise(r => (globalThis as any).setTimeout(r, 200))
+  expect(await ui.find({ type: 'Text', text: /Не вдалося відкрити нову сесію \(код 1\)/ })).toBeDefined()
+
+  refuseOpen = false
+  await ui.press({ key })
+  await new Promise(r => (globalThis as any).setTimeout(r, 200))
+  expect(await ui.find({ type: 'Text', text: /Не вдалося відкрити нову сесію/ })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('the terminal, which has no drawing, gives the «+» as a plain glyph button', async ($, on) => {
+  await started($, on)
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  // the terminal draws a roster, not rooms: no label, so no «+» (nothing to put it beside)
+  expect(await ui.find({ type: 'Button', text: /^\+$/ })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('the coworking room has a «+» too, which opens a session with no folder; a remote office has none', async ($, on) => {
+  const now = new Date().toISOString()
+  const cowork = { sessionId: 'w', title: 'Chat W', cwd: 'C:\\Users\\x\\scratch-workspaces\\y', isRunning: true, lastActivityAt: now, link: 'claude://x/w' }
+  const remote = { sessionId: 'r', title: 'Chat R', cwd: '/home/x/app', isRunning: true, lastActivityAt: now, link: 'claude://x/r' }
+  SESSIONS.push(cowork, remote)
+  try {
+    await started($, on)
+    await new Promise(r => (globalThis as any).setTimeout(r, 300))
+    const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+    const adds = async () => (await ui.findAll({ type: 'Svg' })).filter((x: any) => x.props.source.includes('<title>Нова сесія в проєкті</title>')).length
+    // the project and the coworking room, not the remote office
+    expect(await adds()).toBe(2)
+    expect(await ui.find({ type: 'Button', key: 'new-#cowork' })).toBeDefined()
+    expect(await ui.find({ type: 'Button', key: 'new-#remote' })).toBeUndefined()
+
+    runs.length = 0
+    await ui.press({ key: 'new-#cowork' })
+    await new Promise(r => (globalThis as any).setTimeout(r, 200))
+    const opened = runs.filter(c => c[0] === 'cmd' && c.some(a => a.startsWith('claude://code/new')))
+    expect(opened).toHaveLength(1)
+    expect(opened[0]!.at(-1)).toBe('claude://code/new')
+    await ui.unmount()
+  } finally {
+    SESSIONS.splice(SESSIONS.indexOf(cowork), 1)
+    SESSIONS.splice(SESSIONS.indexOf(remote), 1)
+  }
+})
+
+test('with one project chosen, in the galaxies, its «+» is there as well', async ($, on) => {
+  await started($, on)
+  await new Promise(r => (globalThis as any).setTimeout(r, 300))
+  await $.command.run({ command: 'office', args: 'theme galaxy' })
+  await $.ui.mount({ ...PANE, surface: 'desktop' }).then(async (ui: any) => {
+    await new Promise(r => (globalThis as any).setTimeout(r, 200))
+    // one galaxy on the screen: the detail view, with the planets
+    expect(await ui.find({ type: 'Button', key: 'new-d:/work/my project' })).toBeDefined()
+    await ui.press({ key: 'room-d:/work/my project' })
+    await new Promise(r => (globalThis as any).setTimeout(r, 200))
+    expect(await ui.find({ type: 'Button', key: 'new-d:/work/my project' })).toBeDefined()
+    await ui.unmount()
+  })
 })

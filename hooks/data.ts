@@ -39,9 +39,22 @@ const ORDER: Record<Kind, number> = { work: 0, wait: 1, rest: 2, home: 3 }
 export function classify(raw: RawSession[], prev: Memory, now: number): Classified {
   const live = raw.filter(s => !s.isArchived)
   const ids = new Set(live.map(s => s.sessionId))
+  // chats started from another one that are still running: that other one, if it has stopped, waits for them
+  const running = new Map<string, { id: string; title: string; on?: string }[]>()
+  for (const s of live) {
+    if (s.isRunning && s.startedBy && ids.has(s.startedBy)) {
+      running.set(s.startedBy, [...(running.get(s.startedBy) ?? []), { id: s.sessionId, title: s.title }])
+    }
+  }
   const sessions: Memory['sessions'] = {}
   const events: OfficeEvent[] = []
-  const workers: { worker: Worker; room: ReturnType<typeof roomOf>; pr?: number }[] = []
+  const workers: { worker: Worker; room: ReturnType<typeof roomOf>; pr?: number; cwd?: string }[] = []
+
+  // what a chat waits for: the chats it started that still run, and the colleague it asked and has not heard from
+  const waits = (s: RawSession) => {
+    const all = [...(running.get(s.sessionId) ?? []), ...(s.waitsFor ?? [])]
+    return all.filter((x, i) => all.findIndex(y => y.id === x.id && y.on === x.on) === i)
+  }
 
   for (const s of live) {
     const before = prev.sessions[s.sessionId]
@@ -68,6 +81,7 @@ export function classify(raw: RawSession[], prev: Memory, now: number): Classifi
 
     workers.push({
       room: roomOf(s.cwd),
+      cwd: s.cwd,
       pr: s.prState === 'OPEN' ? s.prNumber : undefined,
       worker: {
         id: s.sessionId,
@@ -79,18 +93,21 @@ export function classify(raw: RawSession[], prev: Memory, now: number): Classifi
         ...(prevKind ? { prevKind } : {}),
         prNumber: s.prState === 'OPEN' ? s.prNumber : undefined,
         ...(s.needsAnswer ? { needsAnswer: true, ...(s.askedAt ? { askedAt: s.askedAt } : {}) } : {}),
+        ...(!s.isRunning && waits(s).length ? { waitsFor: waits(s) } : {}),
         // a running chat is past its failed turn: only one that has stopped is in error
         ...(s.error && !s.isRunning ? { error: s.error } : {}),
         parentId: s.startedBy && ids.has(s.startedBy) ? s.startedBy : undefined,
+        ...(s.plan?.length ? { plan: s.plan } : {}),
+        ...(s.weight ? { size: s.weight.size, haze: s.weight.haze } : {}),
       },
     })
   }
 
   const byKey = new Map<string, Room>()
-  for (const { worker, room, pr } of workers) {
+  for (const { worker, room, pr, cwd } of workers) {
     let r = byKey.get(room.key)
     if (!r) {
-      r = { key: room.key, name: room.name, type: room.type, workers: [], homeCount: 0, prNumbers: [] }
+      r = { key: room.key, name: room.name, type: room.type, workers: [], homeCount: 0, prNumbers: [], ...(room.type === 'project' && cwd ? { cwd } : {}) }
       byKey.set(room.key, r)
     }
     if (worker.kind === 'home') r.homeCount++
@@ -117,7 +134,7 @@ export function ack(mem: Memory, id: string): Memory {
   return { ...mem, sessions: { ...mem.sessions, [id]: { ...one, isAcked: true } } }
 }
 
-export type GroupKey = 'err' | 'ask' | 'work' | 'done'
+export type GroupKey = 'err' | 'ask' | 'agent' | 'work' | 'done'
 
 export const RED = '#E5534B'
 
@@ -128,9 +145,15 @@ export type Group = { key: GroupKey; title: string; color: string; items: { w: W
 const GROUP_DEFS: { key: GroupKey; title: string; color: string; has: (w: Worker) => boolean }[] = [
   { key: 'err', title: 'З помилкою', color: RED, has: w => !!w.error },
   { key: 'ask', title: 'Потребують відповіді', color: '#E8943A', has: w => !w.error && !!w.needsAnswer },
-  { key: 'work', title: 'У роботі', color: '#6FA8DC', has: w => !w.error && !w.needsAnswer && w.kind === 'work' },
-  { key: 'done', title: 'Завершені, чекають', color: '#7FBF8E', has: w => !w.error && !w.needsAnswer && w.kind === 'wait' },
+  { key: 'agent', title: 'Чекають іншого агента', color: '#A98BE0', has: w => !w.error && !w.needsAnswer && !!w.waitsFor },
+  { key: 'work', title: 'У роботі', color: '#6FA8DC', has: w => !w.error && !w.needsAnswer && !w.waitsFor && w.kind === 'work' },
+  { key: 'done', title: 'Завершені, чекають', color: '#7FBF8E', has: w => !w.error && !w.needsAnswer && !w.waitsFor && w.kind === 'wait' },
 ]
+
+/** The list a chat is in, if any: its colour is the one the chat is drawn in, whatever the theme. */
+export const groupKeyOf = (w: Worker): GroupKey | undefined => GROUP_DEFS.find(d => d.has(w))?.key
+
+export const GROUP_COLOR = Object.fromEntries(GROUP_DEFS.map(d => [d.key, d.color])) as Record<GroupKey, string>
 
 /** The sessions of the given rooms in the three lists the pane shows, in that order; a list with nobody in it is left out. */
 export function groupSessions(rooms: Room[]): Group[] {

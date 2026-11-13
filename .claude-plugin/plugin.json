@@ -1,7 +1,7 @@
 {
   "name": "iso-office",
-  "version": "0.1.0",
-  "description": "An isometric mini-office for Claude Code: projects are rooms, sessions are workers who type, wait for you or take a coffee break.",
+  "version": "0.2.0",
+  "description": "An isometric mini-office (or a sky of galaxies) for Claude Code: projects are rooms or galaxies, sessions are workers or stars, plan steps are planets.",
   "author": { "name": "astheras" },
   "license": "MIT",
   "keywords": ["sessions", "dashboard", "visualization", "desktop"],

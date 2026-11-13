@@ -11,7 +11,13 @@ export type SessionError = {
 }
 
 /** The transcripts already checked for an error: per chat, the activity time the check was made at, and what it found. */
-export type ErrorCache = Record<string, { at: string; error?: SessionError }>
+/** What a chat is waiting for from another one: the chat, and what it is about ("Unity"), when that is known. */
+export type WaitItem = { id: string; title: string; on?: string }
+
+/** A request a chat sent to a colleague chat that has not been answered: who it went to and what it said. */
+export type PeerAsk = { to: string; id: string; text: string; at: number }
+
+export type ErrorCache = Record<string, { at: string; error?: SessionError; peer?: PeerAsk }>
 
 /** One session as the app's list_sessions returns it (the fields the office reads). */
 export type RawSession = {
@@ -31,6 +37,12 @@ export type RawSession = {
   askedAt?: number
   /** the chat's last turn ended in an API error (read from its transcript) */
   error?: SessionError
+  /** chats it waits for (an unanswered request to a colleague chat, read from its transcript) */
+  waitsFor?: WaitItem[]
+  /** the statuses of the chat's task list, in order (read from its transcript) */
+  plan?: PlanStatus[]
+  /** how big its output and its cache are, in steps (read from its transcript) */
+  weight?: { size: number; haze: number }
 }
 
 /** work: running now. wait: finished lately and not yet looked at. rest: idle. home: idle over a day. */
@@ -50,10 +62,18 @@ export type Worker = {
   /** blocked on the person: listed first, whatever its kind */
   needsAnswer?: boolean
   askedAt?: number
+  /** it has stopped, but chats it started are still running: it waits for them */
+  waitsFor?: WaitItem[]
   /** failed: listed first, whatever its kind */
   error?: SessionError
   /** a session started from another one that is in the list: drawn as an intern */
   parentId?: string
+  /** the statuses of its task list, in order; absent when it has none or it is not known */
+  plan?: PlanStatus[]
+  /** how much it has written, 0..4 (steps of the output tokens): the size of its star */
+  size?: number
+  /** how much it has read from the cache, 0..3: the cloud around its star */
+  haze?: number
 }
 
 export type Room = {
@@ -66,6 +86,8 @@ export type Room = {
   homeCount: number
   /** open pull requests of the room's sessions */
   prNumbers: number[]
+  /** the project's folder as its sessions give it (projects only): where a new session in it is started */
+  cwd?: string
 }
 
 /** What the mod remembers between polls, to see who just finished. */
@@ -79,8 +101,33 @@ export type Memory = {
   >
 }
 
+/** A step of a chat's task list, as the app shows it under the chat's last message. */
+export type PlanStatus = 'pending' | 'in_progress' | 'completed'
+export type PlanItem = { text: string; status: PlanStatus }
+
+/** What was read of a chat's transcript so far: how far, and what it said about the chat's task list and its tokens. */
+export type Sketch = {
+  /** the activity time the read was made at */
+  at: string
+  /** how many bytes of the transcript are read, and how long it was then: more is read until the two meet */
+  offset: number
+  size: number
+  /** the chat has no transcript on this machine (a cloud chat) */
+  none?: boolean
+  plan?: PlanItem[]
+  /** tokens written, and read from the cache, as of the last finished turn */
+  out?: number
+  cache?: number
+  /** how much the chat holds in its context: what its last reply was given to read */
+  context?: number
+}
+
+export type SketchCache = Record<string, Sketch>
+
 /** What the accordion of a chosen chat shows; every field is optional, a missing one is left out of the rows. */
 export type Detail = {
+  /** the chat's task list as it stands now, read from its transcript */
+  plan?: PlanItem[]
   model?: string
   effort?: string
   permissionMode?: string
@@ -126,6 +173,8 @@ export type View = {
   note: string
   /** show the click areas as blocks, to check they sit on the figures */
   debug: boolean
+  /** how the work is drawn: the isometric office (the default) or the galaxies */
+  theme?: 'office' | 'galaxy'
 }
 
 export type Office = {
@@ -137,6 +186,6 @@ export type Office = {
 
 declare module 'claude-code' {
   interface PluginState {
-    'iso-office': { memory: Shaped<Memory>; office: Shaped<Office>; view: Shaped<View>; detail: Shaped<DetailState>; errors: Shaped<ErrorCache> }
+    'iso-office': { memory: Shaped<Memory>; office: Shaped<Office>; view: Shaped<View>; detail: Shaped<DetailState>; errors: Shaped<ErrorCache>; sketches: Shaped<SketchCache> }
   }
 }

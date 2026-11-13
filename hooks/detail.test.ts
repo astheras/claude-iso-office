@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import type { Room, Worker } from '../types'
-import { compact, detailRows, detailScript, dollars, lasting, parseDetail, stateSince } from './detail'
+import { compact, detailRows, detailScript, dollars, lasting, parseDetail, stateSince, waitsText } from './detail'
 
 const NOW = Date.parse('2026-11-12T12:00:00Z')
 const MIN = 60_000
@@ -116,4 +116,33 @@ test('the disk-read script holds no double quote and takes only a plain id', () 
   expect(script.includes('"')).toBe(false)
   expect(() => detailScript("x'; Remove-Item *")).toThrow()
   expect(() => detailScript('')).toThrow()
+})
+
+test('what a chat waits for is one line, and all of it in the accordion', () => {
+  const w = worker({ kind: 'rest', waitsFor: [{ id: 'a', title: 'Розвідка' }, { id: 'b', title: 'Звіт' }, { id: 'c', title: 'Тест' }] })
+  expect(waitsText(w)).toBe('Розвідка і ще 2')
+  expect(waitsText(worker())).toBeUndefined()
+  const rows = Object.fromEntries(detailRows(w, room, undefined, NOW))
+  expect(rows['Стан']).toMatch(/^чекає іншого агента/)
+  expect(rows['Чекає']).toBe('Розвідка; Звіт; Тест')
+})
+
+test('a wait for Unity names the chat that holds it', () => {
+  const w = worker({ kind: 'rest', waitsFor: [{ id: 'f', title: 'Їжа для комплексів', on: 'Unity' }] })
+  expect(waitsText(w)).toBe('Unity (Їжа для комплексів)')
+  expect(Object.fromEntries(detailRows(w, room, undefined, NOW))['Чекає']).toBe('Unity (Їжа для комплексів)')
+})
+
+test('a chat with a task list shows how far it has got, then each step with its mark', () => {
+  const plan = [
+    { text: 'Read the rules', status: 'completed' as const },
+    { text: 'Write the parser', status: 'in_progress' as const },
+    { text: 'Test it', status: 'pending' as const },
+  ]
+  const rows = detailRows(worker(), room, { plan }, NOW)
+  const at = rows.findIndex(r => r[0] === 'План')
+  expect(rows[at]![1]).toBe('1 з 3')
+  expect(rows.slice(at + 1, at + 4).map(r => `${r[0]} ${r[1]}`)).toEqual(['✓ Read the rules', '▶ Write the parser', '○ Test it'])
+  // no list, no plan lines
+  expect(detailRows(worker(), room, {}, NOW).some(r => r[0] === 'План')).toBe(false)
 })

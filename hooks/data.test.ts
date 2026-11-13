@@ -157,3 +157,62 @@ test('the summary counts the chats with a failure, and says nothing when there a
   expect(summary(failed.rooms)).toBe('працюють 1, чекають 0, з помилкою 1')
   expect(summary(classify([s('b', { isRunning: true })], emptyMemory(), NOW).rooms)).toBe('працюють 1, чекають 0')
 })
+
+test('a chat that stopped while chats it started still run waits for them, in its own group', () => {
+  const out = classify(
+    [
+      s('parent'),
+      s('kid1', { isRunning: true, startedBy: 'parent', title: 'Розвідка' }),
+      s('kid2', { isRunning: true, startedBy: 'parent', title: 'Звіт' }),
+      s('idle-kid', { startedBy: 'parent' }),
+      // a parent that is itself running is just working
+      s('busy', { isRunning: true }),
+      s('kid3', { isRunning: true, startedBy: 'busy' }),
+    ],
+    emptyMemory(),
+    NOW,
+  )
+  const groups = groupSessions(out.rooms)
+  expect(groups.map(g => g.key)).toEqual(['agent', 'work'])
+  const p = groups[0]!.items[0]!.w
+  expect(p.id).toBe('parent')
+  expect(p.waitsFor!.map(x => x.title)).toEqual(['Розвідка', 'Звіт'])
+  expect(groups[1]!.items.map(x => x.w.id).sort()).toEqual(['busy', 'kid1', 'kid2', 'kid3'])
+  // once the children stop, it no longer waits
+  const after = classify([s('parent'), s('kid1', { startedBy: 'parent' })], emptyMemory(), NOW)
+  expect(groupSessions(after.rooms)).toEqual([])
+})
+
+test('a chat waits for the colleague it asked, as well as for chats it started, but only while it is stopped', () => {
+  const ask = [{ id: 'food', title: 'Їжа для комплексів', on: 'Unity' }]
+  const out = classify(
+    [
+      s('asker', { waitsFor: ask }),
+      s('both', { waitsFor: ask }),
+      s('kid', { isRunning: true, startedBy: 'both', title: 'Розвідка' }),
+      s('busy', { isRunning: true, waitsFor: ask }),
+    ],
+    emptyMemory(),
+    NOW,
+  )
+  const byId = Object.fromEntries(out.rooms.flatMap(r => r.workers).map(w => [w.id, w]))
+  expect(byId['asker']!.waitsFor).toEqual(ask)
+  expect(byId['both']!.waitsFor!.map(x => x.title)).toEqual(['Розвідка', 'Їжа для комплексів'])
+  // a running chat is not waiting, whatever it once asked
+  expect(byId['busy']!.waitsFor).toBeUndefined()
+  expect(groupSessions(out.rooms)[0]!.key).toBe('agent')
+})
+
+test('a project room knows its folder, so that a new session can be started in it; other rooms do not', () => {
+  const at = new Date().toISOString()
+  const raw = [
+    { sessionId: 'a', title: 'a', cwd: 'D:\\work\\alpha', isRunning: true, lastActivityAt: at },
+    { sessionId: 'b', title: 'b', cwd: 'C:\\Users\\x\\scratch-workspaces\\y', isRunning: true, lastActivityAt: at },
+    { sessionId: 'c', title: 'c', cwd: '/home/x/app', isRunning: true, lastActivityAt: at },
+  ]
+  const rooms = classify(raw, emptyMemory(), Date.now()).rooms
+  const byType = Object.fromEntries(rooms.map(r => [r.type, r.cwd]))
+  expect(byType.project).toBe('D:\\work\\alpha')
+  expect(byType.cowork).toBeUndefined()
+  expect(byType.remote).toBeUndefined()
+})
