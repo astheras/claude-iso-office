@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { ack, classify, emptyMemory, groupSessions, HOME_MS, parseSessions, roomOf, WAIT_MS } from './data'
+import { ack, classify, emptyMemory, groupSessions, HOME_MS, parseSessions, roomOf, summary, WAIT_MS } from './data'
 import type { RawSession } from '../types'
 
 const NOW = Date.parse('2026-11-12T12:00:00Z')
@@ -122,4 +122,38 @@ test('sessions are listed in three groups: needs an answer, working, finished an
 
 test('a group with nobody in it is left out', () => {
   expect(groupSessions(classify([s('a')], emptyMemory(), NOW).rooms)).toEqual([])
+})
+
+const FAIL = { code: 'authentication_failed', status: 403, text: 'Failed to authenticate.', at: NOW - 5 * 60_000 }
+
+test('a chat whose last turn failed is listed first, and a failure outranks every other group', () => {
+  const out = classify(
+    [
+      s('bad'),
+      // it waits for the person too, but the failure is what matters
+      s('bad-ask', { needsAnswer: true, error: FAIL }),
+      s('work', { isRunning: true }),
+      s('ask', { needsAnswer: true }),
+    ].map(x => (x.sessionId === 'bad' ? { ...x, error: FAIL } : x)),
+    emptyMemory(),
+    NOW,
+  )
+  const groups = groupSessions(out.rooms)
+  expect(groups.map(g => g.key)).toEqual(['err', 'ask', 'work'])
+  expect(groups[0]!.items.map(x => x.w.id).sort()).toEqual(['bad', 'bad-ask'])
+  expect(groups[0]!.color).toBe('#E5534B')
+  expect(groups[1]!.items.map(x => x.w.id)).toEqual(['ask'])
+})
+
+test('a running chat is past its failed turn: the failure is dropped, and nothing else is lost', () => {
+  const out = classify([s('a', { isRunning: true, error: FAIL })], emptyMemory(), NOW)
+  const w = out.rooms[0]!.workers[0]!
+  expect(w.error).toBeUndefined()
+  expect(w.kind).toBe('work')
+})
+
+test('the summary counts the chats with a failure, and says nothing when there are none', () => {
+  const failed = classify([s('a', { error: FAIL }), s('b', { isRunning: true })], emptyMemory(), NOW)
+  expect(summary(failed.rooms)).toBe('працюють 1, чекають 0, з помилкою 1')
+  expect(summary(classify([s('b', { isRunning: true })], emptyMemory(), NOW).rooms)).toBe('працюють 1, чекають 0')
 })

@@ -1,10 +1,11 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, Timer } from 'claude-code'
 
-import type { Detail, DetailState, Memory, Office, RawSession, Room, View, Worker } from '../types'
-import { ack, ago, classify, emptyMemory, groupSessions, parseSessions, summary, WORD } from './data'
+import type { Detail, DetailState, ErrorCache, Memory, Office, RawSession, Room, View, Worker } from '../types'
+import { ack, ago, agoText, classify, emptyMemory, groupSessions, parseSessions, RED, summary, WORD } from './data'
 import type { Group } from './data'
 import { detailRows, detailScript, parseDetail } from './detail'
+import { errorLabel, errorOf, errorsScript, needsCheck, nextCache, parseErrors } from './errors'
 import { floorSvg } from './floor'
 import type { Label, Spot } from './floor'
 import { ICON_H, ICON_W, iconSvg } from './icons'
@@ -35,6 +36,9 @@ const detail = atom({ plugin: 'iso-office', key: 'detail' } as const, { id: '', 
   shape: 'detail-1',
 })
 
+// which chats have been read for an error, and when: a transcript is read once per activity, not once per poll
+const errors = atom({ plugin: 'iso-office', key: 'errors' } as const, {} as ErrorCache, { shape: 'errors-1' })
+
 // the open chat's details are fetched again when older than this (cost moves at the end of each turn)
 const DETAIL_TTL_MS = 30000
 
@@ -48,6 +52,10 @@ const SETTLE_MS = 1500
 const RENDER_POLL_MS = 1500
 
 let isPolling = false
+let lastStatus = ''
+// when each chat's details were last fetched: kept here, not in the pane's state, which would redraw it at every fetch
+const detailFetchedAt = new Map<string, number>()
+let isCheckingErrors = false
 let lastRenderPollAt = 0
 let pollStartedAt = 0
 let lastPollAt = 0
@@ -58,9 +66,16 @@ const textOf = (content: unknown): string =>
     ? content.map(b => (b && typeof b === 'object' && 'text' in b ? String((b as { text: unknown }).text) : '')).join('')
     : String(content)
 
-/** Activity times to the minute: a running session moves its time every poll, and the pane must not redraw for that. */
+/**
+ * Activity times to five minutes: a running session moves its time all the time, and every write the pane reads makes it
+ * draw again. Nothing on screen needs the time more exactly than that (the terminal roster says "5 хв").
+ */
+const ACTIVITY_STEP_MS = 5 * 60000
 const quantize = (rooms: Room[]): Room[] =>
-  rooms.map(r => ({ ...r, workers: r.workers.map(w => ({ ...w, activityAt: Math.floor(w.activityAt / 60000) * 60000 })) }))
+  rooms.map(r => ({
+    ...r,
+    workers: r.workers.map(w => ({ ...w, activityAt: Math.floor(w.activityAt / ACTIVITY_STEP_MS) * ACTIVITY_STEP_MS })),
+  }))
 
 /** The id the app gives this very session; list_sessions never lists the session that asks, so it is fetched alone. */
 const ownId = async ($: EngineInterface) => (await $.env.get('CLAUDE_CODE_HOST_SESSION_ID')) || undefined
@@ -108,6 +123,43 @@ async function waitingSessions($: EngineInterface): Promise<Map<string, number>>
   return ids
 }
 
+/**
+ * Reads the end of the transcripts of the chats that stopped or changed since they were last read, to see whether their
+ * last reply was an API error (a refused sign-in, a server fault). One PowerShell run for all of them, off the poll's
+ * way: when it has found something the poll is made again to show it. A failed run is remembered as "no error" until the
+ * chat changes, so a broken shell is not started every five seconds.
+ */
+async function refreshErrors($: EngineInterface, listed: RawSession[], cache: ErrorCache) {
+  if (isCheckingErrors) return
+  const todo = needsCheck(listed, cache, Date.now())
+  // chats that left the list are forgotten
+  const hasGone = Object.keys(nextCache(cache, listed, [], {})).length !== Object.keys(cache).length
+  if (todo.length === 0 && !hasGone) return
+  isCheckingErrors = true
+  try {
+    let found: ReturnType<typeof parseErrors> = {}
+    if (todo.length > 0) {
+      try {
+        const r = await $.process.run(['powershell', '-NoProfile', '-NonInteractive', '-Command', errorsScript(todo.map(s => s.sessionId))], {
+          timeoutMs: 30000,
+        })
+        if (r.exitCode === 0) found = parseErrors(r.stdout)
+      } catch {
+        // no shell, or it timed out: nothing found
+      }
+    }
+    const merged = nextCache(cache, listed, todo, found)
+    if (JSON.stringify(merged) !== JSON.stringify(cache)) {
+      await update($, errors, () => merged)
+      // an error found (or cleared) changes what the poll shows
+      const failedIn = (c: ErrorCache) => JSON.stringify(Object.entries(c).filter(([, e]) => e.error).map(([id, e]) => [id, e.at]).sort())
+      if (failedIn(merged) !== failedIn(cache)) void poll($)
+    }
+  } finally {
+    isCheckingErrors = false
+  }
+}
+
 async function poll($: EngineInterface) {
   const t = Date.now()
   if (isPolling && t - pollStartedAt < STUCK_MS) return
@@ -123,9 +175,15 @@ async function poll($: EngineInterface) {
     if (r.isError) throw new Error(textOf(r.content).slice(0, 200))
     const listed = parseSessions(textOf(r.content))
     if (own && !listed.some(s => s.sessionId === own.sessionId)) listed.push(own)
+    const failed = await read($, errors)
     const raw = listed.map(s => {
       const since = asking.get(s.sessionId)
-      return since === undefined ? s : { ...s, needsAnswer: true, ...(since ? { askedAt: since } : {}) }
+      const error = errorOf(failed, s)
+      return {
+        ...s,
+        ...(since === undefined ? {} : { needsAnswer: true, ...(since ? { askedAt: since } : {}) }),
+        ...(error ? { error } : {}),
+      }
     })
     lastPollAt = Date.now()
     const prev = await read($, memory)
@@ -139,14 +197,19 @@ async function poll($: EngineInterface) {
     if (JSON.stringify(rooms) !== JSON.stringify(prevOffice.rooms) || prevOffice.error) {
       await update($, office, () => ({ at: now, rooms }))
     }
-    void $.ui.status(`Office: ${summary(rooms)}`)
+    const status = `Office: ${summary(rooms)}`
+    if (status !== lastStatus) {
+      lastStatus = status
+      void $.ui.status(status)
+    }
+    void refreshErrors($, listed, failed)
 
     // the open chat's accordion: fetched again when it is not the chat held, or when its numbers have grown old
     // (a fetch that has not finished in that time is taken for lost, and is made again)
     const chosenId = (await read($, view)).selected
     if (chosenId) {
       const held = await read($, detail)
-      if (held.id !== chosenId || Date.now() - held.at > DETAIL_TTL_MS) void loadDetail($, chosenId)
+      if (held.id !== chosenId || Date.now() - (detailFetchedAt.get(chosenId) ?? 0) > DETAIL_TTL_MS) void loadDetail($, chosenId)
     }
 
     // no toast for the chat the person is in: its answer is in front of them
@@ -185,7 +248,7 @@ function pollSoon($: EngineInterface) {
 const open = ($: EngineInterface) => $.ui.open({ id: PANE, title: TITLE })
 
 const MARK = { work: '▶', wait: '!', rest: '·', home: '' } as const
-const GROUP_MARK = { ask: '?', work: '▶', done: '!' } as const
+const GROUP_MARK = { err: '✕', ask: '?', work: '▶', done: '!' } as const
 // icons as plain glyphs, where there is no drawing to hold their tooltips
 const GLYPH: Record<IconKind, string> = { open: '↗', seen: '✓' }
 
@@ -221,6 +284,7 @@ const numOf = (v: unknown): number | undefined => (typeof v === 'number' && Numb
 
 /** Collects everything the accordion shows for one chat; what the app does not give is left out, never guessed. */
 async function loadDetail($: EngineInterface, id: string) {
+  detailFetchedAt.set(id, Date.now())
   const held = await read($, detail)
   if (held.id !== id) await update($, detail, () => ({ id, at: Date.now(), loading: true }))
   try {
@@ -251,7 +315,11 @@ async function loadDetail($: EngineInterface, id: string) {
     }
     // the person may have moved on while this was being read
     if ((await read($, view)).selected !== id) return
-    await update($, detail, () => ({ id, at: Date.now(), loading: false, data }))
+    // write only what changed: a write the pane reads draws it again, and a fetch that found the same numbers is not news
+    const cur = await read($, detail)
+    if (cur.id !== id || cur.loading || JSON.stringify(cur.data) !== JSON.stringify(data)) {
+      await update($, detail, () => ({ id, at: Date.now(), loading: false, data }))
+    }
   } catch {
     const cur = await read($, detail)
     if (cur.id === id && cur.loading) await update($, detail, () => ({ id, at: Date.now(), loading: false, ...(cur.data ? { data: cur.data } : {}) }))
@@ -380,12 +448,12 @@ export const register: Register = on => {
       const rows = detailRows(w, r, mine?.data, now)
       return (
         <Box flexDirection="column" paddingLeft={2}>
-          {rows.map(([label, value]) => (
+          {rows.map(([label, value, tone]) => (
             <Box flexDirection="row" gap={1}>
               <Box width={12}>
                 <Text dimColor>{label}</Text>
               </Box>
-              <Text>{value}</Text>
+              {tone === 'bad' ? <Text color={RED}>{value}</Text> : <Text>{value}</Text>}
             </Box>
           ))}
           {(!mine || mine.loading) && <Text dimColor>Завантажую деталі…</Text>}
@@ -400,7 +468,7 @@ export const register: Register = on => {
         <Box flexDirection="row" gap={1}>
           <Button key={`pick-${w.id}`} plain dimColor={w.kind === 'rest'} onPress={() => void pick($, w.id)}>
             {MARK[w.kind]} {w.parentId ? '↳ ' : ''}
-            {w.title} — {WORD[w.kind]}, {ago(w.activityAt, now)}
+            {w.title} — {w.error ? `помилка: ${errorLabel(w.error)}` : WORD[w.kind]}, {ago(w.activityAt, now)}
           </Button>
           {openIcon(w)}
           {w.kind === 'wait' && seenIcon(w)}
@@ -429,6 +497,7 @@ export const register: Register = on => {
               {r.name}
               {w.prNumber ? ` · PR ${w.prNumber}` : ''}
             </Text>
+            {w.error && <Text color={RED}>{`${errorLabel(w.error)} · ${agoText(w.error.at, now)}`}</Text>}
             {openIcon(w)}
             {g.key === 'done' && seenIcon(w)}
           </Box>
@@ -499,7 +568,8 @@ export const register: Register = on => {
             <Button key="room-all" variant={room ? 'secondary' : 'primary'} onPress={() => void goRoom($, '')}>
               Весь офіс
             </Button>
-            {active.map(r => (
+            {/* in a fixed order: by activity the buttons would move under the pointer */}
+            {[...active].sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0)).map(r => (
               <Button key={`go-${r.key}`} variant={room?.key === r.key ? 'primary' : 'secondary'} onPress={() => void goRoom($, r.key)}>
                 {`${r.name} · ${r.workers.length}`}
               </Button>

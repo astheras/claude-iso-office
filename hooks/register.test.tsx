@@ -26,7 +26,19 @@ const SESSIONS = [
     prNumber: 34,
     prState: 'OPEN',
   },
+  // stopped and idle: only a failed last reply (read from its transcript) puts it in a group
+  { sessionId: 'c', title: 'Chat C', cwd: 'D:\\work\\my project', isRunning: false, lastActivityAt: new Date().toISOString(), link: 'claude://x/c' },
 ]
+
+// what the script that reads transcripts printed: chat c ended on a refused sign-in
+const ERRORS = JSON.stringify({
+  c: {
+    code: 'authentication_failed',
+    status: '403',
+    text: 'Failed to authenticate. API Error: 403 Attention Required! | Cloudflare',
+    at: new Date(Date.now() - 5 * 60000).toISOString(),
+  },
+})
 
 const OWN = {
   sessionId: 'me',
@@ -99,7 +111,8 @@ const engine = ($: any, on: any) => {
   // the script that reads what the app keeps on disk, and the command that opens a chat
   on('process.run', (_: unknown, e: any) => {
     runs.push([...e.argv])
-    const stdout = e.argv[0] === 'powershell' ? DISK : ''
+    // the two scripts it is given: the transcript error read, and the chat details read
+    const stdout = e.argv[0] !== 'powershell' ? '' : String(e.argv[4]).includes('isApiErrorMessage') ? ERRORS : DISK
     return { value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
 }
@@ -215,5 +228,52 @@ test('drawing the pane reads the sessions again, so switching to a chat shows fr
   await new Promise(r => (globalThis as any).setTimeout(r, 100))
 
   expect(polls).toBeGreaterThan(before)
+  await ui.unmount()
+})
+
+test('a chat that ended on an error is listed first, in red, with what went wrong', async ($, on) => {
+  await started($, on)
+  await new Promise(r => (globalThis as any).setTimeout(r, 300))
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+
+  // the group titles in the order they are drawn: the failure leads
+  const titles = (await ui.findAll({ type: 'Text' }))
+    .map((x: any) => String(x.text))
+    .filter((t: string) => /^(З помилкою|Потребують відповіді|У роботі|Завершені)/.test(t))
+  expect(titles[0]).toBe('З помилкою · 1')
+  expect(titles).toContain('Потребують відповіді · 1')
+
+  const heading: any = await ui.find({ type: 'Text', text: /^З помилкою · 1$/ })
+  expect(heading.props.color).toBe('#E5534B')
+  const what: any = await ui.find({ type: 'Text', text: /помилка авторизації \(403\) · 5 хв тому/ })
+  expect(what).toBeDefined()
+  expect(what.props.color).toBe('#E5534B')
+  expect(await ui.find({ type: 'Text', text: /з помилкою 1/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('the accordion of a failed chat gives the error and its message', async ($, on) => {
+  await started($, on)
+  await new Promise(r => (globalThis as any).setTimeout(r, 300))
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+
+  await ui.press({ key: 'pick-c' })
+  await new Promise(r => (globalThis as any).setTimeout(r, 200))
+  expect(await ui.find({ type: 'Text', text: /^помилка · 5 хв$/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /Failed to authenticate\. API Error: 403/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('a transcript is read once per activity, not once per poll', async ($, on) => {
+  await started($, on)
+  await new Promise(r => (globalThis as any).setTimeout(r, 300))
+  const reads = () => runs.filter(c => c[0] === 'powershell' && String(c[4]).includes('isApiErrorMessage')).length
+  const before = reads()
+  // it was read: the first poll found chats it had not read
+  expect(before).toBeGreaterThan(0)
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  await new Promise(r => (globalThis as any).setTimeout(r, 300))
+  // the pane drew and polled again, yet the chats were already read at this activity
+  expect(reads()).toBe(before)
   await ui.unmount()
 })

@@ -1,5 +1,6 @@
 import type { Detail, Room, Worker } from '../types'
-import { ago, WORD } from './data'
+import { agoText, WORD } from './data'
+import { errorLabel } from './errors'
 
 /** How long, to the minute; seconds only when short. */
 export const lasting = (ms: number): string => {
@@ -31,6 +32,7 @@ export const stamp = (ms: number): string => {
 
 /** When the chat's present state began: asking since the registry says, else since its last turn edge, else since seen. */
 export function stateSince(w: Worker, d: Detail | undefined): number {
+  if (w.error && w.error.at) return w.error.at
   if (w.needsAnswer && w.askedAt) return w.askedAt
   return d?.turnEdgeAt || w.changedAt
 }
@@ -129,12 +131,18 @@ export function parseDetail(stdout: string): Detail {
 }
 
 /** The label and value of each line of the accordion, in order; what is not known is left out. */
-export function detailRows(w: Worker, room: Room, d: Detail | undefined, now: number): [string, string][] {
-  const rows: [string, string][] = []
-  const add = (label: string, value: string | undefined) => {
-    if (value) rows.push([label, value])
+export type Row = [label: string, value: string, tone?: 'bad']
+
+export function detailRows(w: Worker, room: Room, d: Detail | undefined, now: number): Row[] {
+  const rows: Row[] = []
+  const add = (label: string, value: string | undefined, tone?: 'bad') => {
+    if (value) rows.push(tone ? [label, value, tone] : [label, value])
   }
-  add('Стан', `${stateWord(w)} · ${lasting(now - stateSince(w, d))}`)
+  add('Стан', `${stateWord(w)} · ${lasting(now - stateSince(w, d))}`, w.error ? 'bad' : undefined)
+  if (w.error) {
+    add('Помилка', errorLabel(w.error), 'bad')
+    add('Повідомлення', w.error.text.length > 200 ? `${w.error.text.slice(0, 200)}…` : w.error.text, 'bad')
+  }
   if (d) {
     if (d.costUSD !== undefined) add('Вартість', `${d.costPartial ? '≥ ' : ''}${dollars(d.costUSD)}`)
     if (d.tokens) {
@@ -149,7 +157,7 @@ export function detailRows(w: Worker, room: Room, d: Detail | undefined, now: nu
     add('Модель', [d.model, d.effort].filter(Boolean).join(' · '))
     add('Дозволи', d.permissionMode)
     if (d.turns !== undefined) add('Ходів', String(d.turns))
-    if (d.createdAt) add('Створено', `${stamp(d.createdAt)} (${ago(d.createdAt, now)} тому)`.replace('(щойно тому)', '(щойно)'))
+    if (d.createdAt) add('Створено', `${stamp(d.createdAt)} (${agoText(d.createdAt, now)})`)
     if (d.wallMs !== undefined) {
       const parts = [`загалом ${lasting(d.wallMs)}`]
       if (d.apiMs !== undefined) parts.push(`модель ${lasting(d.apiMs)}`)
@@ -169,4 +177,4 @@ export function detailRows(w: Worker, room: Room, d: Detail | undefined, now: nu
 }
 
 /** The word for the group a chat is listed in, for the "state" line. */
-export const stateWord = (w: Worker): string => (w.needsAnswer ? 'чекає відповіді' : WORD[w.kind])
+export const stateWord = (w: Worker): string => (w.error ? 'помилка' : w.needsAnswer ? 'чекає відповіді' : WORD[w.kind])

@@ -1,3 +1,18 @@
+/** How a chat's last turn failed: the last thing it said was an API error, e.g. a refused sign-in. */
+export type SessionError = {
+  /** the app's code for it: authentication_failed, server_error, rate_limit... */
+  code: string
+  /** the HTTP status, when there was one */
+  status?: number
+  /** the message the chat showed */
+  text: string
+  /** when it happened (ms) */
+  at: number
+}
+
+/** The transcripts already checked for an error: per chat, the activity time the check was made at, and what it found. */
+export type ErrorCache = Record<string, { at: string; error?: SessionError }>
+
 /** One session as the app's list_sessions returns it (the fields the office reads). */
 export type RawSession = {
   sessionId: string
@@ -14,6 +29,8 @@ export type RawSession = {
   needsAnswer?: boolean
   /** when the chat started to wait for the person (ms), from the registry */
   askedAt?: number
+  /** the chat's last turn ended in an API error (read from its transcript) */
+  error?: SessionError
 }
 
 /** work: running now. wait: finished lately and not yet looked at. rest: idle. home: idle over a day. */
@@ -33,6 +50,8 @@ export type Worker = {
   /** blocked on the person: listed first, whatever its kind */
   needsAnswer?: boolean
   askedAt?: number
+  /** failed: listed first, whatever its kind */
+  error?: SessionError
   /** a session started from another one that is in the list: drawn as an intern */
   parentId?: string
 }
@@ -118,6 +137,6 @@ export type Office = {
 
 declare module 'claude-code' {
   interface PluginState {
-    'iso-office': { memory: Shaped<Memory>; office: Shaped<Office>; view: Shaped<View>; detail: Shaped<DetailState> }
+    'iso-office': { memory: Shaped<Memory>; office: Shaped<Office>; view: Shaped<View>; detail: Shaped<DetailState>; errors: Shaped<ErrorCache> }
   }
 }

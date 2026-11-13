@@ -79,6 +79,8 @@ export function classify(raw: RawSession[], prev: Memory, now: number): Classifi
         ...(prevKind ? { prevKind } : {}),
         prNumber: s.prState === 'OPEN' ? s.prNumber : undefined,
         ...(s.needsAnswer ? { needsAnswer: true, ...(s.askedAt ? { askedAt: s.askedAt } : {}) } : {}),
+        // a running chat is past its failed turn: only one that has stopped is in error
+        ...(s.error && !s.isRunning ? { error: s.error } : {}),
         parentId: s.startedBy && ids.has(s.startedBy) ? s.startedBy : undefined,
       },
     })
@@ -115,15 +117,19 @@ export function ack(mem: Memory, id: string): Memory {
   return { ...mem, sessions: { ...mem.sessions, [id]: { ...one, isAcked: true } } }
 }
 
-export type GroupKey = 'ask' | 'work' | 'done'
+export type GroupKey = 'err' | 'ask' | 'work' | 'done'
+
+export const RED = '#E5534B'
 
 export type Group = { key: GroupKey; title: string; color: string; items: { w: Worker; room: Room }[] }
 
-// orange asks for attention, soft blue is busy, soft green is finished; mid tones that read on a light and a dark theme
+// red is a failure, orange asks for attention, soft blue is busy, soft green is finished; mid tones that read on a
+// light and a dark theme. A chat is in one list only: a failure outranks the rest.
 const GROUP_DEFS: { key: GroupKey; title: string; color: string; has: (w: Worker) => boolean }[] = [
-  { key: 'ask', title: 'Потребують відповіді', color: '#E8943A', has: w => !!w.needsAnswer },
-  { key: 'work', title: 'У роботі', color: '#6FA8DC', has: w => !w.needsAnswer && w.kind === 'work' },
-  { key: 'done', title: 'Завершені, чекають', color: '#7FBF8E', has: w => !w.needsAnswer && w.kind === 'wait' },
+  { key: 'err', title: 'З помилкою', color: RED, has: w => !!w.error },
+  { key: 'ask', title: 'Потребують відповіді', color: '#E8943A', has: w => !w.error && !!w.needsAnswer },
+  { key: 'work', title: 'У роботі', color: '#6FA8DC', has: w => !w.error && !w.needsAnswer && w.kind === 'work' },
+  { key: 'done', title: 'Завершені, чекають', color: '#7FBF8E', has: w => !w.error && !w.needsAnswer && w.kind === 'wait' },
 ]
 
 /** The sessions of the given rooms in the three lists the pane shows, in that order; a list with nobody in it is left out. */
@@ -149,9 +155,21 @@ export const ago = (ms: number, now: number): string => {
   return m < 1 ? 'щойно' : m < 60 ? `${m} хв` : m < 1440 ? `${Math.round(m / 60)} год` : `${Math.round(m / 1440)} д`
 }
 
+/** "щойно" or "12 хв тому". */
+export const agoText = (ms: number, now: number): string => {
+  const t = ago(ms, now)
+  return t === 'щойно' ? t : `${t} тому`
+}
+
 export function summary(rooms: Room[]): string {
   let work = 0
   let wait = 0
-  for (const r of rooms) for (const w of r.workers) w.kind === 'work' ? work++ : w.kind === 'wait' ? wait++ : 0
-  return `працюють ${work}, чекають ${wait}`
+  let failed = 0
+  for (const r of rooms) {
+    for (const w of r.workers) {
+      w.kind === 'work' ? work++ : w.kind === 'wait' ? wait++ : 0
+      if (w.error) failed++
+    }
+  }
+  return `працюють ${work}, чекають ${wait}${failed ? `, з помилкою ${failed}` : ''}`
 }

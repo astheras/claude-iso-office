@@ -1,5 +1,5 @@
 import type { Kind, Room, Worker } from '../types'
-import { ago, WORD } from './data'
+import { WORD } from './data'
 import { alert, bob, body, bubble, dots, fade, L, talkText } from './figures'
 import { box, esc, hash, HAIR, n1, PALETTE, poly } from './iso'
 import type { Pt } from './iso'
@@ -85,7 +85,9 @@ function build(rooms: Room[], now: number, cap: number, selectedId: string): Flo
     return `<use href="#${kind}${i}"/>`
   }
 
-  const shownRooms = rooms.slice(0, MAX_ROOMS)
+  // the busiest rooms are the ones shown (the caller's order), but they stand in a fixed order: by where the last
+  // activity was, they would swap places, and the whole drawing with them, whenever two projects took turns
+  const shownRooms = rooms.slice(0, MAX_ROOMS).sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0))
   const cols = Math.min(COLS, Math.max(1, shownRooms.length))
   const plans: Plan[] = shownRooms.map((room, idx) => {
     const picked = [...room.workers].sort((a, b) => b.activityAt - a.activityAt).slice(0, cap)
@@ -172,7 +174,8 @@ function build(rooms: Room[], now: number, cap: number, selectedId: string): Flo
 
     const rest = p.shown.filter(w => w.kind === 'rest')
     const slots = assignRest(rest)
-    const tip = (w: Worker) => `${w.title} — ${WORD[w.kind]}, ${ago(w.activityAt, now)}${w.parentId ? ' (стажер)' : ''}`
+    // no time in the tooltip: it would change the drawing every minute, and a changed drawing is drawn afresh (it blinks)
+    const tip = (w: Worker) => `${w.title} — ${WORD[w.kind]}${w.parentId ? ' (стажер)' : ''}`
     const scaleOf = (w: Worker, at: Pt, inner: string) =>
       `<g transform="translate(${n1(at[0])} ${n1(at[1])})${w.parentId ? ' scale(0.8)' : ''}">${inner}</g>`
     const aisle = (yy: number): Pt => g(ZONE - 0.2, yy)

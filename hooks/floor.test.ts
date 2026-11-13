@@ -109,3 +109,37 @@ test('every shown worker has a click spot inside the scene, and only the picked 
   expect((out.svg.match(/<ellipse /g) ?? []).length).toBe(1)
   expect((floorSvg(rooms, NOW).svg.match(/<ellipse /g) ?? []).length).toBe(0)
 })
+
+// A drawing that changes is drawn afresh by the pane, and that shows as a blink: so it must change only when what is
+// on it changes, never with the clock or with the order things were listed in.
+const OFFICE = () => [
+  room('alpha', [w('a', 'work'), w('b', 'wait'), w('c', 'rest')]),
+  room('beta', [w('d', 'rest'), w('e', 'work')]),
+]
+
+test('the drawing does not change with time while nobody is walking', () => {
+  const at = floorSvg(OFFICE(), NOW).svg
+  expect(floorSvg(OFFICE(), NOW + 61_000).svg).toBe(at)
+  expect(floorSvg(OFFICE(), NOW + 3 * 3_600_000).svg).toBe(at)
+})
+
+test('the drawing does not change when a chat is merely active again', () => {
+  const busier = OFFICE().map(r => ({ ...r, workers: r.workers.map(x => ({ ...x, activityAt: NOW + 120_000 })) }))
+  expect(floorSvg(busier, NOW).svg).toBe(floorSvg(OFFICE(), NOW).svg)
+})
+
+test('rooms stand where they stood, whatever order they are listed in', () => {
+  const swapped = [...OFFICE()].reverse()
+  const a = floorSvg(OFFICE(), NOW)
+  const b = floorSvg(swapped, NOW)
+  expect(b.svg).toBe(a.svg)
+  expect(b.labels.map(l => l.name)).toEqual(['alpha', 'beta'])
+})
+
+test('with more rooms than fit, the busiest are the ones kept', () => {
+  const many = Array.from({ length: MAX_ROOMS + 2 }, (_, i) => room(`r${String(i).padStart(2, '0')}`, [w(`w${i}`, 'work')]))
+  // listed busiest first, as the office sorts them: the last two are the ones left out, and the rest stand in name order
+  const out = floorSvg(many, NOW)
+  expect(out.hiddenRooms).toBe(2)
+  expect(out.labels.map(l => l.name)).toEqual(many.slice(0, MAX_ROOMS).map(r => r.name))
+})

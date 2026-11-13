@@ -11,7 +11,7 @@ An isometric mini-office for the Claude Code desktop app. Every project folder i
 - **Click a worker** (or its title in the list below) to open an accordion under that chat: its state and how long it has lasted, what it cost, its tokens, the context fill, the model, the number of turns, how long it has run, the code it changed, the branch, the PR and the folder. Click again to close it. Cost and tokens are as of the end of the last turn.
 - **The arrow** after a chat's project name opens that chat (its tooltip reads **Перейти в чат**, "Go to chat"). A finished session also has a tick that marks it as seen.
 - **Click a room's name** (or its button at the top) to look at that room alone, larger.
-- **Under the picture** the sessions are listed in groups, each with a title and its project name under it: **needs an answer** (orange), **in progress** (soft blue), **finished, waiting** (soft green). When a room is chosen at the top, only its sessions are listed.
+- **Under the picture** the sessions are listed in groups, each with a title and its project name under it: **with an error** (red, always first: a chat whose last reply was an API error such as a refused sign-in, with what went wrong beside it), **needs an answer** (orange), **in progress** (soft blue), **finished, waiting** (soft green). When a room is chosen at the top, only its sessions are listed.
 
 The pane fills the width of the panel and grows when you widen it. Hover over a worker for a tooltip.
 
@@ -52,6 +52,7 @@ This is a **Claude Code** plugin, not a general tool. It uses Claude Code's plug
 - The accordion's cost, tokens and turn count are read from the app's own files (the chat's record under `Claude-Data` and the last `cost-state` line of its transcript in `~/.claude/projects`) by a short PowerShell run, also **Windows** only. If a file cannot be read, those lines are left out; the rest still shows.
 - The click areas over the picture are placed in the pane's character cells, measured for the default desktop font (a cell is about 7.5 px wide and 20 px tall). With another font size they can be off; `/office debug` shows where they are.
 - The app does not tell a plugin that a session is waiting for you. "Finished, waiting" means: it was running, then stopped, and you have not pressed **ок** yet (it fades after 30 minutes).
+- "With an error" is read from the end of the chat's transcript (`~/.claude/projects`, the last 256 KB) by a short PowerShell run, **Windows** only: a chat is in error when it has stopped and its last reply is flagged as an API error. Each chat is read once per activity, not on every poll, and the error clears itself when the chat answers again. If a transcript cannot be read, that chat is simply not marked.
 - "Needs an answer" is read from the status that each running chat keeps in `~/.claude/sessions/*.json` (`waiting`: a permission or a question). If that file cannot be read, the group stays empty and nothing else changes.
 - Sessions started from another one (forks) are drawn smaller.
 
