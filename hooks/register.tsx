@@ -468,7 +468,7 @@ export const register: Register = on => {
     if (arg === 'theme' || arg.startsWith('theme ')) {
       const asked = arg.slice(5).trim()
       if (asked !== '' && asked !== 'office' && asked !== 'galaxy') return { text: 'Themes: office, galaxy. /office theme alone switches.' }
-      const now = (await read($, view)).theme ?? 'office'
+      const now = (await read($, view)).theme ?? 'galaxy'
       const next = asked === 'office' || asked === 'galaxy' ? asked : now === 'galaxy' ? 'office' : 'galaxy'
       await update($, view, v => ({ ...v, theme: next }))
       return { text: next === 'galaxy' ? 'Theme: galaxies.' : 'Theme: office.' }
@@ -505,7 +505,7 @@ export const register: Register = on => {
     const room = active.find(r => r.key === v.room)
     const shown = room ? [room] : active
     const quiet = o.rooms.length - active.length
-    const isGalaxy = v.theme === 'galaxy'
+    const isGalaxy = v.theme !== 'office'
     const scene = Svg && shown.length > 0 ? (isGalaxy ? galaxySvg(shown, now, v.selected) : floorSvg(shown, now, v.selected)) : undefined
     const count = (k: Worker['kind']) => shown.reduce((n, r) => n + r.workers.filter(w => w.kind === k).length, 0)
 

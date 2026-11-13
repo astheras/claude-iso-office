@@ -153,10 +153,17 @@ const engine = ($: any, on: any) => {
   })
 }
 
-const started = async ($: any, on: any) => {
+// the pane as it opens: in the galaxies
+const startedFresh = async ($: any, on: any) => {
   engine($, on)
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
   await new Promise(r => (globalThis as any).setTimeout(r, 100))
+}
+
+// most tests look at the office: it is chosen first
+const started = async ($: any, on: any) => {
+  await startedFresh($, on)
+  await $.command.run({ command: 'office', args: 'theme office' })
 }
 
 test('the desktop pane draws the office as one scene with the room names as buttons', async ($, on) => {
@@ -336,7 +343,7 @@ test('/office theme switches between the office and the galaxies, and says which
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
   const scene = async () => String(((await ui.find({ type: 'Svg' })) as any).props.source)
 
-  // the office is the first theme
+  // the office, as the helper chose it
   expect(await scene()).toContain('<use href="#se')
 
   expect((await $.command.run({ command: 'office', args: 'theme' })).text).toBe('Theme: galaxies.')
@@ -523,4 +530,17 @@ test('with one project chosen, in the galaxies, its «+» is there as well', asy
     expect(await ui.find({ type: 'Button', key: 'new-d:/work/my project' })).toBeDefined()
     await ui.unmount()
   })
+})
+
+test('the pane opens in the galaxies, and the office is a choice', async ($, on) => {
+  await startedFresh($, on)
+  await new Promise(r => (globalThis as any).setTimeout(r, 300))
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  const scene = async () => String(((await ui.find({ type: 'Svg' })) as any).props.source)
+  expect(await scene()).toContain('id="milky"')
+  // a bare /office theme goes to the other one, the office
+  expect((await $.command.run({ command: 'office', args: 'theme' })).text).toBe('Theme: office.')
+  await new Promise(r => (globalThis as any).setTimeout(r, 200))
+  expect(await scene()).toContain('<use href="#se')
+  await ui.unmount()
 })

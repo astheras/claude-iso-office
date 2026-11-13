@@ -18,7 +18,7 @@ The pane fills the width of the panel and grows when you widen it. Hover over a 
 
 ## The galaxies theme
 
-`/office theme` switches the picture from the office to a night sky (and back). The list under it, the accordion and the clicks work the same.
+The galaxies are the default picture. `/office theme` switches to the isometric office (and back). The list under it, the accordion and the clicks work the same.
 
 - **A project is a galaxy**, a session is a **star** in it. A project's sessions idle for more than a day are dim points in its halo, counted under its name («згаслих»).
 - **The star's colour is the colour of its list**: red with an error (a ragged flash), orange when it needs an answer (a beacon ring that opens wider the longer you have been kept waiting), lilac when it waits for another agent (a dashed stream to the star it waits for, even in another galaxy), soft blue while it works (it glows and breathes), soft green when it has finished and waits for you, pale white when it merely idles (it fades through the day). A ring round a star is an open pull request; a short flash is a change of state.
