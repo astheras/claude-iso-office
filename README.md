@@ -7,7 +7,7 @@ An isometric mini-office for the Claude Code desktop app. Every project folder i
 - **Working sessions** sit at a desk and type: the monitor is lit and a speech bubble with three dots floats over their head.
 - **Sessions that just finished** stand at their desk with a raised hand and a "!" until you look at them. The **ок** ("ok") button, or **усі побачені** ("all seen"), clears it.
 - **Idle sessions** leave their desk: they walk to the coffee machine, chat in pairs or sit on the sofa. When a session changes state, the worker walks between the desk and the break area.
-- **Sessions idle for more than a day** go home: they are counted on the room's label instead of being drawn.
+- **Sessions idle for more than three days** go home: they are counted on the room's label instead of being drawn. A project with no session newer than that is not shown at all.
 - **Click a worker** (or its title in the list below) to open an accordion under that chat: its state and how long it has lasted, what it cost, its tokens, the context fill, the model, the number of turns, how long it has run, the code it changed, the branch, the PR and the folder. Click again to close it. Cost and tokens are as of the end of the last turn.
 - **The arrow** after a chat's project name opens that chat (its tooltip reads **Перейти в чат**, "Go to chat"). A finished session also has a tick that marks it as seen.
 - **Click a room's name** (or its button at the top) to look at that room alone, larger.
@@ -20,7 +20,7 @@ The pane fills the width of the panel and grows when you widen it. Hover over a 
 
 The galaxies are the default picture. `/office theme` switches to the isometric office (and back). The list under it, the accordion and the clicks work the same.
 
-- **A project is a galaxy**, a session is a **star** in it. A project's sessions idle for more than a day are dim points in its halo, counted under its name («згаслих»).
+- **A project is a galaxy**, a session is a **star** in it. A project's sessions idle for more than three days are dim points in its halo, counted under its name («згаслих»).
 - **The star's colour is the colour of its list**: red with an error (a ragged flash), orange when it needs an answer (a beacon ring that opens wider the longer you have been kept waiting), lilac when it waits for another agent (a dashed stream to the star it waits for, even in another galaxy), soft blue while it works (it glows and breathes), soft green when it has finished and waits for you, pale white when it merely idles (it fades through the day). A ring round a star is an open pull request; a short flash is a change of state.
 - **The size of the system is how much its context holds** (what the chat's last reply was given to read), in five steps from under 20k tokens to over 400k: the more it holds, the bigger the star and, with it, its planets and orbits. **The cloud round it is how much it has read from the cache.**
 - **A plan is planets.** A session that keeps a task list has one planet per step: a step done is joined to its star, the step under way pulses (while the session is working: a stopped session's planet stays still and takes the colour of the reason it stopped), a step to come is a dashed outline. When all the steps are done the orbit closes into a ring. With several galaxies on the screen the plan is drawn as a ring of marks round the star, one per step; choose a galaxy to see the planets.

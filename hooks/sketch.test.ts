@@ -27,8 +27,8 @@ test('a chat is read when it was never read, when it moved, or when it was not r
   expect(needsSketch(list, cache, NOW).map(s => s.sessionId)).toEqual(['new', 'moved', 'more'])
 })
 
-test('a chat that is archived, or idle over a day, is not read', () => {
-  const old = new Date(NOW - 26 * 3600000).toISOString()
+test('a chat that is archived, or idle over three days, is not read', () => {
+  const old = new Date(NOW - 74 * 3600000).toISOString()
   expect(needsSketch([raw('a', { isArchived: true }), raw('b', { lastActivityAt: old })], {}, NOW)).toEqual([])
   // but a running chat is read, whatever its last activity says
   expect(needsSketch([raw('c', { lastActivityAt: old, isRunning: true })], {}, NOW)).toHaveLength(1)

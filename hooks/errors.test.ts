@@ -22,7 +22,7 @@ test('only a stopped chat that changed since it was read is read again', () => {
       s('moved'), // active again since it was read
       s('running', { isRunning: true }),
       s('archived', { isArchived: true }),
-      s('old', { lastActivityAt: iso(26 * 3600_000) }), // past the day: not listed, not read
+      s('old', { lastActivityAt: iso(74 * 3600_000) }), // past the three days: not listed, not read
     ],
     cache,
     NOW,

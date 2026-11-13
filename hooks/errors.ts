@@ -6,7 +6,7 @@ export const MAX_CHECKED = 30
 const TAIL_BYTES = 262144
 
 /**
- * The chats whose transcripts are to be read for an error: stopped, not archived, active within the day (the rest are not
+ * The chats whose transcripts are to be read for an error: stopped, not archived, active within the last three days (the rest are not
  * listed), and not read since their last activity. A transcript changes only when the chat does, so a read is made once
  * per activity, not once per poll.
  */

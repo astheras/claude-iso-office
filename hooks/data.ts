@@ -1,7 +1,8 @@
 import type { Kind, Memory, RawSession, Room, Worker } from '../types'
 
 export const WAIT_MS = 30 * 60 * 1000
-export const HOME_MS = 24 * 60 * 60 * 1000
+/** Idle this long and a session goes home; a project with no session newer than this is not drawn at all. */
+export const HOME_MS = 72 * 60 * 60 * 1000
 
 export const emptyMemory = (): Memory => ({ ready: false, muted: false, sessions: {} })
 

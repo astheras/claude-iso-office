@@ -45,7 +45,7 @@ export type RawSession = {
   weight?: { size: number; haze: number }
 }
 
-/** work: running now. wait: finished lately and not yet looked at. rest: idle. home: idle over a day. */
+/** work: running now. wait: finished lately and not yet looked at. rest: idle. home: idle over three days. */
 export type Kind = 'work' | 'wait' | 'rest' | 'home'
 
 export type Worker = {
@@ -82,7 +82,7 @@ export type Room = {
   type: 'project' | 'remote' | 'cowork'
   /** workers sitting at desks: every kind except home, busiest first */
   workers: Worker[]
-  /** sessions idle over a day: not drawn, counted on the door */
+  /** sessions idle over three days: not drawn, counted on the door */
   homeCount: number
   /** open pull requests of the room's sessions */
   prNumbers: number[]

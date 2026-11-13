@@ -346,7 +346,7 @@ function backdropOf(cell: Cell, sh: Shape, defs: Set<string>): string {
   out +=
     `<g transform="translate(${n1(sh.cx)} ${n1(sh.cy)}) rotate(${deg})"><g filter="url(#haze)">${local}</g>${dust}</g>` +
     `<circle cx="${n1(sh.cx)}" cy="${n1(sh.cy)}" r="${n1(Math.min(sh.rx, sh.ry) * 0.2)}" fill="url(#core)"/>`
-  // sessions idle over a day are not drawn as stars: they are the dim points of the galaxy
+  // sessions idle over three days are not drawn as stars: they are the dim points of the galaxy
   const r = rng(h0 + 1)
   for (let i = 0; i < Math.min(cell.room.homeCount, 14); i++) {
     const th = r() * 2 * Math.PI
