@@ -3,7 +3,7 @@ import { expect, test } from 'claude-code/testing'
 import type { Kind, PlanStatus, Room, Worker } from '../types'
 import { GROUP_COLOR } from './data'
 import { MAX_ROOMS, SIZE_LIMIT } from './floor'
-import { galaxySvg, REST_COLOR } from './galaxy'
+import { galaxySvg, REST_COLOR, steady } from './galaxy'
 
 const NOW = Date.parse('2026-11-13T12:00:00Z')
 
@@ -292,7 +292,7 @@ test('the worst case fits the limit: eight galaxies full of sessions with long p
   expect(one.spots.length).toBeGreaterThan(14)
 })
 
-test('a working system beats plainly: its glow swells and a halo round the star grows and fades; a quiet one is still', () => {
+test('a working system beats plainly: a halo round the star grows and fades; a quiet one is still', () => {
   const { svg } = galaxySvg([room('r', [w('k', 'work'), w('d', 'wait'), w('i', 'rest')])], NOW)
   const k = star(svg, 'k')
   expect(k).toContain('data-k="beat"')
@@ -300,6 +300,29 @@ test('a working system beats plainly: its glow swells and a halo round the star 
   expect(k).toContain('repeatCount="indefinite"')
   expect(star(svg, 'd')).not.toContain('data-k="beat"')
   expect(star(svg, 'i')).not.toContain('<animate')
+})
+
+test('a working system has two white arcs turning round it, which no other state has; they stay between the star and the ring of its plan', () => {
+  const plan = [D, N, F]
+  const { svg } = galaxySvg([room('r', [w('k', 'work', { plan }), w('q', 'work', { needsAnswer: true }), w('d', 'wait'), w('i', 'rest')]), room('o', [w('x')])], NOW)
+  const k = star(svg, 'k')
+  expect(count(k, /data-k="spin"/g)).toBe(1)
+  const spin = k.match(/<circle data-k="spin"[^>]*>/)![0]
+  // white, whatever the star's colour is, and turning for good
+  expect(spin).toContain('stroke="#FFFFFF"')
+  expect(k).toContain('attributeName="transform" type="rotate"')
+  expect(k).toMatch(/type="rotate" values="0 [\d.]+ [\d.]+;360 [\d.]+ [\d.]+" dur="1.2s" begin="-[\d.]+s" repeatCount="indefinite"/)
+  // two arcs, with a gap after each: one dash and one gap are half the circumference
+  const r = Number(spin.match(/ r="([\d.]+)"/)![1])
+  const [dash, gap] = spin.match(/stroke-dasharray="([\d.]+) ([\d.]+)"/)!.slice(1).map(Number) as [number, number]
+  expect(dash).toBeGreaterThan(0)
+  expect(gap).toBeGreaterThan(0)
+  expect(Math.abs((dash + gap) * 2 - 2 * Math.PI * r)).toBeLessThan(0.3)
+  // inside the ring of the plan, which is 7 from the star's edge
+  const ring = Number(k.match(/<path data-p="d" d="M[\d.]+ [\d.]+A([\d.]+) /)![1])
+  expect(r).toBeLessThan(ring)
+  // the others do not turn: a question, a finished session, a resting one
+  for (const id of ['q', 'd', 'i']) expect(star(svg, id)).not.toContain('data-k="spin"')
 })
 
 test('pressing a system opens its planets even among several galaxies; the others keep their rings', () => {
@@ -331,6 +354,18 @@ test('a picture drawn again goes on from where the beat was: each cycle starts i
   for (const t of [0, 1234, 99999, NOW]) expect(Number(beat(t).slice(1))).toBeLessThan(1.8)
 })
 
+test('a picture drawn again with nothing changed is the very same one (it is drawn at every step of the scroll), a changed one is new', () => {
+  const same = steady<ReturnType<typeof galaxySvg>>()
+  const rooms = [room('r', [w('k', 'work'), w('q', 'work', { needsAnswer: true, askedAt: NOW - 60_000 })])]
+  const first = same(galaxySvg(rooms, NOW))
+  // seconds later only the start of each cycle has moved: the same picture, byte for byte
+  for (const dt of [1000, 2500, 7000]) expect(same(galaxySvg(rooms, NOW + dt))).toBe(first)
+  // a session that changed is a new picture
+  const other = same(galaxySvg([room('r', [w('k', 'work'), w('q', 'rest')])], NOW + 8000))
+  expect(other).not.toBe(first)
+  expect(other.svg).not.toBe(first.svg)
+})
+
 test('the names are the own light text of the pane on the dark picture, level with the top of each galaxy', () => {
   const out = galaxySvg([room('alpha', [w('a')]), room('beta', [w('b')])], NOW)
   expect(out.labels.map(l => l.name)).toEqual(['alpha', 'beta'])
@@ -341,4 +376,22 @@ test('the names are the own light text of the pane on the dark picture, level wi
   const [a, b] = out.labels
   expect(a!.y).toBe(b!.y)
   expect(b!.x).toBeGreaterThan(a!.x)
+})
+
+test('a star carries its session name as a tooltip, over the whole system and not only the painted pixels', () => {
+  const { svg } = galaxySvg([room('r', [w('a', 'work', { title: 'Моя сесія', plan: [D, N, F] })])], NOW)
+  const s = star(svg, 'a')
+  expect(s).toContain('<title>Моя сесія — працює</title>')
+  expect(s).toMatch(/<circle [^>]*fill="none" pointer-events="all"\/>/)
+})
+
+test('a session started by another is tied to it by a thread, in one galaxy or across two, and not when the parent is off the screen', () => {
+  const one = galaxySvg([room('r', [w('p'), w('k', 'work', { parentId: 'p' }), w('l', 'work', { parentId: 'k' })])], NOW).svg
+  expect(count(one, /data-k="tie"/g)).toBe(2)
+
+  const across = galaxySvg([room('r1', [w('p')]), room('r2', [w('k', 'work', { parentId: 'p' })])], NOW).svg
+  expect(count(across, /data-k="tie"/g)).toBe(1)
+
+  expect(count(galaxySvg([room('r', [w('a'), w('b')])], NOW).svg, /data-k="tie"/g)).toBe(0)
+  expect(count(galaxySvg([room('r', [w('k', 'work', { parentId: 'gone' })])], NOW).svg, /data-k="tie"/g)).toBe(0)
 })

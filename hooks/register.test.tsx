@@ -544,3 +544,17 @@ test('the pane opens in the galaxies, and the office is a choice', async ($, on)
   expect(await scene()).toContain('<use href="#se')
   await ui.unmount()
 })
+
+test('a star shows its name in a card of the pane while the pointer is on it', async ($, on) => {
+  await started($, on)
+  await new Promise(r => (globalThis as any).setTimeout(r, 300))
+  await $.command.run({ command: 'office', args: 'theme galaxy' })
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  await new Promise(r => (globalThis as any).setTimeout(r, 200))
+
+  const cards = (await ui.findAll({ type: 'Svg' })).filter((x: any) => x.props.source.includes('>Chat A — працює</text>'))
+  expect(cards).toHaveLength(1)
+  expect(cards[0].props.source).toContain('rx="12"')
+  expect(cards[0].props.source).toContain('stroke="#FFFFFF"')
+  await ui.unmount()
+})

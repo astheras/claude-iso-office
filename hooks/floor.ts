@@ -18,7 +18,8 @@ export const TRANSITION_MS = 12_000
 export const SIZE_LIMIT = 120_000
 
 /** A clickable place on the scene: a worker's torso, in scene px. */
-export type Spot = { id: string; x: number; y: number }
+/** Where a press on a worker lands, and the words shown when the pointer rests there (the drawing's own tooltip is under the buttons). */
+export type Spot = { id: string; x: number; y: number; tip?: string }
 /**
  * Where a room's name goes, in scene px (the pane draws it as real text over the scene, with the «+» that starts a new
  * session in the project beside it).
@@ -293,7 +294,7 @@ function build(rooms: Room[], now: number, cap: number, selectedId: string): Flo
       const moved =
         w.prevKind !== undefined && w.prevKind !== 'home' && isDesk(w.prevKind) !== atDesk && now - w.changedAt < TRANSITION_MS
       if (atDesk) {
-        spots.push({ id: w.id, x: at[0], y: at[1] - 18 })
+        spots.push({ id: w.id, x: at[0], y: at[1] - 18, tip: tip(w) })
         const fig = seatedFigure(w, at)
         if (moved) {
           const from = g(6.65, 2.7)
@@ -301,7 +302,7 @@ function build(rooms: Room[], now: number, cap: number, selectedId: string): Flo
         } else push(dep(cx0 + 1.0, cy0 + 0.5), fig)
       } else {
         const r = restFigure(w)
-        spots.push({ id: w.id, x: r.at[0], y: r.at[1] - 18 })
+        spots.push({ id: w.id, x: r.at[0], y: r.at[1] - 18, tip: tip(w) })
         if (moved) walk(w, at, r.at, [aisle(cy0 + 0.5), aisle(2.7)], r.svg, r.d)
         else push(r.d, r.svg)
       }

@@ -7,11 +7,12 @@ import type { Group } from './data'
 import { detailRows, detailScript, parseDetail, waitsText } from './detail'
 import { errorLabel, errorOf, errorsScript, needsCheck, nextCache, parseErrors, parsePeers, peerOf, waitOf } from './errors'
 import { floorSvg } from './floor'
-import { galaxySvg, REST_COLOR } from './galaxy'
+import { galaxySvg, REST_COLOR, steady } from './galaxy'
 import { planProgress } from './plan'
 import { needsSketch, nextSketches, parseSketches, sketchLook, sketchScript, withSketches } from './sketch'
 import type { Label, Spot } from './floor'
 import { ICON_H, ICON_W, iconSvg } from './icons'
+import { tipSvg } from './tip'
 import type { IconKind } from './icons'
 
 const PANE = 'iso-office'
@@ -56,6 +57,11 @@ const SETTLE_MS = 1500
 // drawing the pane asks for a fresh poll, at most this often: switching to a chat draws its pane, and the timer of a
 // chat that was in the background may not have run while the person was elsewhere
 const RENDER_POLL_MS = 1500
+
+// the pane is drawn again at every step of the scroll: the picture is handed on unchanged unless it really changed,
+// or the host would make it anew each time (it blinks)
+const steadyGalaxy = steady<ReturnType<typeof galaxySvg>>()
+const steadyFloor = steady<ReturnType<typeof floorSvg>>()
 
 let isPolling = false
 let lastStatus = ''
@@ -506,7 +512,7 @@ export const register: Register = on => {
     const shown = room ? [room] : active
     const quiet = o.rooms.length - active.length
     const isGalaxy = v.theme !== 'office'
-    const scene = Svg && shown.length > 0 ? (isGalaxy ? galaxySvg(shown, now, v.selected) : floorSvg(shown, now, v.selected)) : undefined
+    const scene = Svg && shown.length > 0 ? (isGalaxy ? steadyGalaxy(galaxySvg(shown, now, v.selected)) : steadyFloor(floorSvg(shown, now, v.selected))) : undefined
     const count = (k: Worker['kind']) => shown.reduce((n, r) => n + r.workers.filter(w => w.kind === k).length, 0)
 
     const ds = await read($, detail)
@@ -636,15 +642,32 @@ export const register: Register = on => {
     const cellX = (x: number) => Math.max(0, Math.round(x * k))
     const cellY = (y: number) => Math.max(0, Math.round((y * k) / ROW_RATIO))
 
-    const hit = (sp: Spot) => (
-      <Box position="absolute" top={Math.max(0, cellY(sp.y) - 1)} left={Math.max(0, cellX(sp.x) - 2)} flexDirection="column">
-        {[0, 1].map(j => (
-          <Button key={`hit-${sp.id}-${j}`} plain onPress={() => void pick($, sp.id)}>
-            {v.debug ? '▓▓▓▓' : BLANK}
-          </Button>
-        ))}
-      </Box>
-    )
+    // the buttons laid over a star take the pointer, so the drawing's own <title> never shows under them: the name is a
+    // card of the pane's own, shown while the pointer is on the spot (a hidden Box a hover turns on). The card is a small
+    // drawing: a Box has square corners, a drawing has rounded ones, a thin white outline and a fade-in. It has a width
+    // of its own: an absolute Box with none is given its parent's, a few cells, and the drawing is shrunk to it. The
+    // spots are laid after the names of the galaxies, so that a card is over a name, not under it
+    const hit = (sp: Spot) => {
+      const card = sp.tip ? tipSvg(sp.tip) : undefined
+      const at = Math.max(0, cellX(sp.x) - 2)
+      const cardCols = card ? Math.ceil(card.width / CELL_PX) : 0
+      // near the right edge the card opens leftwards, so that the pane does not cut it
+      const shift = card && at + cardCols > cols ? Math.max(-at, 4 - cardCols) : 0
+      return (
+        <Box key={`spot-${sp.id}`} position="absolute" top={Math.max(0, cellY(sp.y) - 1)} left={at} flexDirection="column">
+          {[0, 1].map(j => (
+            <Button key={`hit-${sp.id}-${j}`} plain onPress={() => void pick($, sp.id)}>
+              {v.debug ? '▓▓▓▓' : BLANK}
+            </Button>
+          ))}
+          {card && sp.tip && (
+            <Box position="absolute" top={2} left={shift} width={cardCols + 1} flexShrink={0} display="none" hover={{ display: 'flex' }}>
+              <Svg source={card.svg} alt={sp.tip} width={card.width} height={card.height} isInteractive />
+            </Box>
+          )}
+        </Box>
+      )
+    }
 
     // a name the drawing writes itself (the galaxies, on a dark sky) is pressed through an invisible button of its width
     // the «+» after a name starts a new session in the project. Both are real text of the pane, so that what is pressed is
@@ -707,8 +730,8 @@ export const register: Register = on => {
                 height={slotH}
                 isInteractive
               />
-              {scene.spots.map(hit)}
               {scene.labels.map(tag)}
+              {scene.spots.map(hit)}
             </Box>
             {scene.hiddenRooms > 0 && <Text dimColor>Ще {isGalaxy ? 'галактик' : 'кімнат'} не показано: {scene.hiddenRooms}</Text>}
             {!room && quiet > 0 && <Text dimColor>Проєктів без активності (усі сесії вдома): {quiet}</Text>}

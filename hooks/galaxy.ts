@@ -1,5 +1,5 @@
 import type { PlanStatus, Room, Worker } from '../types'
-import { GROUP_COLOR, groupKeyOf, HOME_MS } from './data'
+import { GROUP_COLOR, groupKeyOf, HOME_MS, WORD } from './data'
 import { MAX_ROOMS, SIZE_LIMIT, TRANSITION_MS } from './floor'
 import type { Label, Scene, Spot } from './floor'
 import { esc, hash, n1 } from './iso'
@@ -228,6 +228,9 @@ function planets(s: Star, running: boolean, begin: number): string {
   return orbits + dots
 }
 
+// no time in the tooltip: it would change the drawing every minute, and a changed drawing is drawn afresh (it blinks)
+const tipOf = (w: Worker) => `${w.title} — ${WORD[w.kind]}${w.parentId ? ' (стажер)' : ''}`
+
 function star(s: Star, c: Ctx): string {
   const { w } = s
   const key = groupKeyOf(w)
@@ -239,14 +242,19 @@ function star(s: Star, c: Ctx): string {
   const begin = (hash(w.id) % 24) / 10
   const haze = w.haze ?? 0
   // idle sessions fade the longer they stand idle
+  const tip = tipOf(w)
   const fade = key === undefined ? 0.5 + 0.5 * Math.max(0, 1 - (c.now - w.activityAt) / HOME_MS) : 1
-  let g = ''
+  // the whole system answers the pointer, not only the painted pixels: the glow and the gaps between the planets are
+  // otherwise not hit, and the tooltip would show only over the star itself
+  let g = `<circle cx="${x}" cy="${y}" r="${n1(Math.max(s.reach + 2, r * 3))}" fill="none" pointer-events="all"/>`
 
   if (haze > 0) {
     const e = r + 12 + haze * 7
     g += `<ellipse data-c="${haze}" cx="${x}" cy="${y}" rx="${n1(e)}" ry="${n1(e * 0.7)}" fill="${c.glow(col)}" opacity="${n1(0.16 + haze * 0.05)}" transform="rotate(${Math.round(((hash(w.id) >>> 5) % 90) - 45)} ${x} ${y})"/>`
   }
-  g += `<circle cx="${x}" cy="${y}" r="${n1(r * 4.2)}" fill="${c.glow(col)}" opacity="0.6">${running ? pulse('opacity', '0.25;0.95;0.25', '1.8s', begin) : ''}</circle>`
+  // a working star's glow is steady and a little brighter: the sign that it works is the turning ring below, and a glow
+  // that also swelled would only be one more thing moving, in the same blue as the sky
+  g += `<circle cx="${x}" cy="${y}" r="${n1(r * 4.2)}" fill="${c.glow(col)}" opacity="${running ? 0.75 : 0.6}"/>`
 
   if (key === 'err') {
     // a ragged flash: eight points, long and short
@@ -259,8 +267,9 @@ function star(s: Star, c: Ctx): string {
     g += `<polygon data-k="err" points="${pts.trim()}" fill="${col}" opacity="0.9"/>`
   } else if (key === 'ask') {
     // a beacon: a ring that spreads and fades, wider the longer the person has been kept waiting
+    // in coarse steps: a drawing that changes every few seconds is drawn afresh every time (it blinks)
     const mins = w.askedAt ? Math.max(0, (c.now - w.askedAt) / 60000) : 0
-    const max = n1(r + 14 + Math.min(18, mins / 2))
+    const max = n1(r + 14 + Math.min(18, Math.floor(mins / 6) * 3))
     g +=
       `<circle data-k="ask" cx="${x}" cy="${y}" r="${n1(r + 3)}" fill="none" stroke="${col}" stroke-width="1.4">` +
       pulse('r', `${n1(r + 3)};${max}`, '2.4s', begin) +
@@ -275,8 +284,19 @@ function star(s: Star, c: Ctx): string {
       pulse('r', `${n1(r * 1.2)};${n1(r * 2.8)};${n1(r * 1.2)}`, '1.8s', begin) +
       pulse('opacity', '0.6;0.05;0.6', '1.8s', begin) +
       '</circle>'
+    // the sign that work is going on: two white arcs turning round the star. White, not the star's blue: a bright mark on a
+    // dark sky reads whatever the hue, and a turn is seen sooner than a glow that swells in place. The arcs lie between the
+    // star and the ring of the plan (r + 7), on a faint track of the star's colour
+    const sr = r + 3.5
+    const len = 2 * Math.PI * sr
+    const dash = len * 0.28
+    g +=
+      `<circle cx="${x}" cy="${y}" r="${n1(sr)}" fill="none" stroke="${col}" stroke-width="1" opacity="0.35"/>` +
+      `<circle data-k="spin" cx="${x}" cy="${y}" r="${n1(sr)}" fill="none" stroke="#FFFFFF" stroke-width="2.2" stroke-linecap="round" stroke-dasharray="${n1(dash)} ${n1(len / 2 - dash)}">` +
+      `<animateTransform attributeName="transform" type="rotate" values="0 ${x} ${y};360 ${x} ${y}" dur="1.2s" begin="-${phase('1.2s', begin)}s" repeatCount="indefinite"/>` +
+      '</circle>'
   }
-  g += `<circle cx="${x}" cy="${y}" r="${n1(r)}" fill="${col}"/><circle cx="${x}" cy="${y}" r="${n1(r * 0.5)}" fill="#FFFFFF" opacity="0.9"/>`
+  g += `<circle cx="${x}" cy="${y}" r="${n1(r)}" fill="${col}"/><circle cx="${x}" cy="${y}" r="${n1(r * (running ? 0.62 : 0.5))}" fill="#FFFFFF" opacity="${running ? 1 : 0.9}"/>`
 
   if (w.prNumber) {
     g += `<ellipse data-k="pr" cx="${x}" cy="${y}" rx="${n1(r * 2.4)}" ry="${n1(r * 0.85)}" fill="none" stroke="#DCE8FF" stroke-width="1" opacity="0.7" transform="rotate(-24 ${x} ${y})"/>`
@@ -292,7 +312,7 @@ function star(s: Star, c: Ctx): string {
   if (w.id === c.selectedId) {
     g += `<circle data-k="aim" cx="${x}" cy="${y}" r="${n1(s.reach + 3)}" fill="none" stroke="#FFFFFF" stroke-width="1" stroke-dasharray="3 3" opacity="0.85"/>`
   }
-  return `<g data-s="${esc(w.id)}" opacity="${n1(fade)}"><title>${esc(w.title)}</title>${g}</g>`
+  return `<g data-s="${esc(w.id)}" opacity="${n1(fade)}"><title>${esc(tip)}</title>${g}</g>`
 }
 
 /** A line from a session to the one it waits for: a dashed stream, or a short ray out when that one is not on the screen. */
@@ -314,6 +334,22 @@ function waits(s: Star, byId: Map<string, Star>): string {
   const x0 = s.x + (s.r + 5) * Math.cos(a)
   const y0 = s.y + (s.r + 5) * Math.sin(a)
   return `<path data-k="wait" d="M${n1(x0)} ${n1(y0)}L${n1(x0 + 26 * Math.cos(a))} ${n1(y0 + 26 * Math.sin(a))}" stroke="${PURPLE}" stroke-width="1.2" stroke-dasharray="3 4" opacity="0.75"/>`
+}
+
+/**
+ * A thread from a system to the one that started it: the parent and the child are tied, in one galaxy or across two.
+ * It runs between the stars' edges, not through them, and is not drawn when the parent is not on the screen.
+ */
+function tie(s: Star, byId: Map<string, Star>): string {
+  const p = s.w.parentId ? byId.get(s.w.parentId) : undefined
+  if (!p || p === s) return ''
+  const d = Math.hypot(s.x - p.x, s.y - p.y)
+  const a = p.r * 1.6
+  const b = s.r * 1.6
+  if (d <= a + b + 2) return ''
+  const ux = (s.x - p.x) / d
+  const uy = (s.y - p.y) / d
+  return `<line data-k="tie" x1="${n1(p.x + ux * a)}" y1="${n1(p.y + uy * a)}" x2="${n1(s.x - ux * b)}" y2="${n1(s.y - uy * b)}" stroke="#DCE8FF" stroke-width="1" stroke-linecap="round" opacity="0.45"/>`
 }
 
 /** The galaxy itself: a glowing disk, its arms and dust, a bright core, and a dim point for each session gone home. */
@@ -419,11 +455,11 @@ function build(rooms: Room[], now: number, cap: number, selectedId: string): Sce
   let fg = ''
   let top = ''
   for (const s of stars) {
-    rays += waits(s, byId)
+    rays += tie(s, byId) + waits(s, byId)
     // the chosen one is drawn last, so its orbits lie over the stars beside it
     if (s.w.id === selectedId) top = star(s, ctx)
     else fg += star(s, ctx)
-    spots.push({ id: s.w.id, x: n1(s.x), y: n1(s.y) })
+    spots.push({ id: s.w.id, x: n1(s.x), y: n1(s.y), tip: tipOf(s.w) })
   }
   fg += top
   colorGlows.add(AMBER)
@@ -459,6 +495,23 @@ function build(rooms: Room[], now: number, cap: number, selectedId: string): Sce
     fg +
     '</svg>'
   return { svg, width: W, height: H, hiddenRooms: rooms.length - shownRooms.length, shownWorkers, spots, labels }
+}
+
+/**
+ * Keeps the picture steady between draws. The pane is drawn again at every step of its scroll, and a picture whose text
+ * differs at all is torn down and made anew by the host (it blinks, and its animations start over). The only thing that
+ * differs between two draws of the same sky is where each animation cycle starts (it follows the clock), so when nothing
+ * else has changed the picture drawn last time is given again, byte for byte.
+ */
+export function steady<T extends { svg: string }>(): (scene: T) => T {
+  let last: { key: string; scene: T } | undefined
+  return scene => {
+    const { svg, ...rest } = scene
+    const key = JSON.stringify(rest) + svg.replace(/ begin="-[\d.]+s"/g, '')
+    if (last && last.key === key) return last.scene
+    last = { key, scene }
+    return scene
+  }
 }
 
 /** The scene with the most sessions per galaxy that fits the size limit. */
