@@ -1,5 +1,6 @@
 import type { PlanStatus, Room, Worker } from '../types'
 import { GROUP_COLOR, groupKeyOf, HOME_MS, WORD } from './data'
+import { mcpName, waitsText } from './detail'
 import { MAX_ROOMS, SIZE_LIMIT, TRANSITION_MS } from './floor'
 import type { Label, Scene, Spot } from './floor'
 import { esc, hash, n1 } from './iso'
@@ -146,7 +147,24 @@ function place(cell: Cell, workers: Worker[], detail: boolean): Star[] {
 
 // ---- drawing ----
 
-type Ctx = { now: number; selectedId: string; detail: boolean; glow: (c: string) => string }
+type Ctx = {
+  now: number
+  selectedId: string
+  detail: boolean
+  glow: (c: string) => string
+  /** the titles of the sessions that wait for a star, by its id: only the stars that are waited for are in it */
+  by: Map<string, string[]>
+}
+
+const MARK_GAP = 3.5 // a star that waits and is waited for has its dashed ring this far outside the solid one
+
+/**
+ * The radius of the ring that marks a star that is waited for. It lies outside what is already round the star: the turning
+ * arcs of a working one (r + 3.5) and the ring of the plan (r + 7), when the plan is drawn as a ring.
+ */
+const markOf = (s: Star, c: Ctx): number => s.r + (planOf(s.w).length > 0 && !(c.detail || s.w.id === c.selectedId) ? 11 : 6)
+/** The radius of the ring of a star that waits: outside the solid one when the star is waited for too. */
+const waitMarkOf = (s: Star, c: Ctx): number => markOf(s, c) + (c.by.has(s.w.id) ? MARK_GAP : 0)
 
 const arc = (x: number, y: number, rr: number, a0: number, a1: number) =>
   `M${n1(x + rr * Math.cos(a0))} ${n1(y + rr * Math.sin(a0))}A${n1(rr)} ${n1(rr)} 0 ${a1 - a0 > Math.PI ? 1 : 0} 1 ${n1(x + rr * Math.cos(a1))} ${n1(y + rr * Math.sin(a1))}`
@@ -229,7 +247,12 @@ function planets(s: Star, running: boolean, begin: number): string {
 }
 
 // no time in the tooltip: it would change the drawing every minute, and a changed drawing is drawn afresh (it blinks)
-const tipOf = (w: Worker) => `${w.title} — ${WORD[w.kind]}${w.parentId ? ' (стажер)' : ''}`
+const tipOf = (w: Worker, by: string[] = []): string => {
+  const waits = groupKeyOf(w) === 'agent' ? waitsText(w) : undefined
+  const named = by.length ? ` · чекають на нього: ${by[0]}${by.length > 1 ? ` і ще ${by.length - 1}` : ''}` : ''
+  const tool = w.mcp && groupKeyOf(w) === 'work' ? ` · чекає MCP: ${mcpName(w.mcp)}` : ''
+  return `${w.title} — ${waits ? `чекає: ${waits}` : WORD[w.kind]}${w.parentId ? ' (стажер)' : ''}${tool}${named}`
+}
 
 function star(s: Star, c: Ctx): string {
   const { w } = s
@@ -242,7 +265,7 @@ function star(s: Star, c: Ctx): string {
   const begin = (hash(w.id) % 24) / 10
   const haze = w.haze ?? 0
   // idle sessions fade the longer they stand idle
-  const tip = tipOf(w)
+  const tip = tipOf(w, c.by.get(w.id))
   const fade = key === undefined ? 0.5 + 0.5 * Math.max(0, 1 - (c.now - w.activityAt) / HOME_MS) : 1
   // the whole system answers the pointer, not only the painted pixels: the glow and the gaps between the planets are
   // otherwise not hit, and the tooltip would show only over the star itself
@@ -295,8 +318,34 @@ function star(s: Star, c: Ctx): string {
       `<circle data-k="spin" cx="${x}" cy="${y}" r="${n1(sr)}" fill="none" stroke="#FFFFFF" stroke-width="2.2" stroke-linecap="round" stroke-dasharray="${n1(dash)} ${n1(len / 2 - dash)}">` +
       `<animateTransform attributeName="transform" type="rotate" values="0 ${x} ${y};360 ${x} ${y}" dur="1.2s" begin="-${phase('1.2s', begin)}s" repeatCount="indefinite"/>` +
       '</circle>'
+    // held up by a tool of an MCP server that has not answered: a small diamond in the colour of a wait goes slowly round,
+    // far out on a faint track (a wait for a tool has no star to be joined to, so no line). Nearer the star when the
+    // planets are open: their first orbit is at r + 17
+    if (w.mcp) {
+      const mr = r + (c.detail || w.id === c.selectedId ? 10.5 : 15)
+      const dx = n1(s.x + mr)
+      g +=
+        `<circle cx="${x}" cy="${y}" r="${n1(mr)}" fill="none" stroke="${PURPLE}" stroke-width="0.6" opacity="0.3"/>` +
+        `<path data-k="mcp" d="M${dx} ${n1(s.y - 3)}L${n1(s.x + mr + 3)} ${y}L${dx} ${n1(s.y + 3)}L${n1(s.x + mr - 3)} ${y}Z" fill="${PURPLE}" stroke="#0A1129" stroke-width="0.8">` +
+        `<animateTransform attributeName="transform" type="rotate" values="0 ${x} ${y};360 ${x} ${y}" dur="7s" begin="-${phase('7s', begin)}s" repeatCount="indefinite"/></path>`
+    }
   }
   g += `<circle cx="${x}" cy="${y}" r="${n1(r)}" fill="${col}"/><circle cx="${x}" cy="${y}" r="${n1(r * (running ? 0.62 : 0.5))}" fill="#FFFFFF" opacity="${running ? 1 : 0.9}"/>`
+
+  // in a wait: a solid ring on the star that is waited for, a dashed one that turns slowly on the star that waits
+  if (c.by.has(w.id)) {
+    g += `<circle data-k="awaited" cx="${x}" cy="${y}" r="${n1(markOf(s, c))}" fill="none" stroke="${PURPLE}" stroke-width="1.8" opacity="0.95"/>`
+  }
+  if (key === 'agent') {
+    const rw = waitMarkOf(s, c)
+    const len = 2 * Math.PI * rw
+    // a whole number of dashes with their gaps go round the ring, so that it has no seam
+    const half = +(len / Math.max(6, Math.round(len / 8.6)) / 2).toFixed(2)
+    g +=
+      `<circle data-k="waiting" cx="${x}" cy="${y}" r="${n1(rw)}" fill="none" stroke="${PURPLE}" stroke-width="1.4" stroke-dasharray="${half} ${half}">` +
+      `<animateTransform attributeName="transform" type="rotate" values="360 ${x} ${y};0 ${x} ${y}" dur="6s" begin="-${phase('6s', begin)}s" repeatCount="indefinite"/>` +
+      '</circle>'
+  }
 
   if (w.prNumber) {
     g += `<ellipse data-k="pr" cx="${x}" cy="${y}" rx="${n1(r * 2.4)}" ry="${n1(r * 0.85)}" fill="none" stroke="#DCE8FF" stroke-width="1" opacity="0.7" transform="rotate(-24 ${x} ${y})"/>`
@@ -315,34 +364,72 @@ function star(s: Star, c: Ctx): string {
   return `<g data-s="${esc(w.id)}" opacity="${n1(fade)}"><title>${esc(tip)}</title>${g}</g>`
 }
 
-/** A line from a session to the one it waits for: a dashed stream, or a short ray out when that one is not on the screen. */
-function waits(s: Star, byId: Map<string, Star>): string {
-  if (groupKeyOf(s.w) !== 'agent') return ''
-  const target = (s.w.waitsFor ?? []).map(x => byId.get(x.id)).find((t): t is Star => !!t && t !== s)
-  if (target) {
-    const dx = target.x - s.x
-    const dy = target.y - s.y
-    const qx = (s.x + target.x) / 2 - dy * 0.18
-    const qy = (s.y + target.y) / 2 + dx * 0.18
-    return (
-      `<path data-k="wait" d="M${n1(s.x)} ${n1(s.y)}Q${n1(qx)} ${n1(qy)} ${n1(target.x)} ${n1(target.y)}" fill="none" stroke="${PURPLE}" stroke-width="1.2" stroke-dasharray="4 5" opacity="0.75">` +
-      `<animate attributeName="stroke-dashoffset" values="18;0" dur="1.4s" begin="-${phase('1.4s', 0)}s" repeatCount="indefinite"/></path>` +
-      `<circle cx="${n1(target.x)}" cy="${n1(target.y)}" r="2.4" fill="${PURPLE}"/>`
-    )
-  }
-  const a = (hash(s.w.id) % 628) / 100
-  const x0 = s.x + (s.r + 5) * Math.cos(a)
-  const y0 = s.y + (s.r + 5) * Math.sin(a)
-  return `<path data-k="wait" d="M${n1(x0)} ${n1(y0)}L${n1(x0 + 26 * Math.cos(a))} ${n1(y0 + 26 * Math.sin(a))}" stroke="${PURPLE}" stroke-width="1.2" stroke-dasharray="3 4" opacity="0.75"/>`
+/**
+ * A dashed line that flows from (x0, y0) to (x1, y1) and ends in an arrow head, whose tip is at (x1, y1): the direction of
+ * a wait. The head is shorter when the gap is; with no room for either, nothing is drawn (the rings already say it).
+ */
+function stream(x0: number, y0: number, x1: number, y1: number): string {
+  const d = Math.hypot(x1 - x0, y1 - y0)
+  if (d < 3) return ''
+  const ux = (x1 - x0) / d
+  const uy = (y1 - y0) / d
+  const len = Math.min(6, d * 0.6)
+  const bx = x1 - ux * len
+  const by = y1 - uy * len
+  const hw = len / 2
+  return (
+    (d > len + 2
+      ? `<path data-k="wait" d="M${n1(x0)} ${n1(y0)}L${n1(bx)} ${n1(by)}" fill="none" stroke="${PURPLE}" stroke-width="2.2" stroke-linecap="round" stroke-dasharray="6 5" opacity="0.9">` +
+        `<animate attributeName="stroke-dashoffset" values="11;0" dur="0.9s" begin="-${phase('0.9s', 0)}s" repeatCount="indefinite"/></path>`
+      : '') +
+    `<path data-k="wait-head" d="M${n1(x1)} ${n1(y1)}L${n1(bx - uy * hw)} ${n1(by + ux * hw)}L${n1(bx + uy * hw)} ${n1(by - ux * hw)}Z" fill="${PURPLE}" opacity="0.9"/>`
+  )
 }
 
 /**
+ * The lines from a session to each of the ones it waits for, from the ring of the one to the ring of the other, with an
+ * arrow at the end that is waited for. What is not on the screen is a short arrow out of the star, the one for all of it.
+ */
+function waits(s: Star, byId: Map<string, Star>, c: Ctx): string {
+  if (groupKeyOf(s.w) !== 'agent') return ''
+  const from = waitMarkOf(s, c)
+  const seen = new Set<Star>()
+  let out = ''
+  let hidden = false
+  for (const x of s.w.waitsFor ?? []) {
+    const t = byId.get(x.id)
+    if (!t) hidden = true
+    if (!t || t === s || seen.has(t)) continue
+    seen.add(t)
+    const d = Math.hypot(t.x - s.x, t.y - s.y)
+    const to = markOf(t, c)
+    // the rings touch: they say it already
+    if (d - from - to < 3) continue
+    const ux = (t.x - s.x) / d
+    const uy = (t.y - s.y) / d
+    out += stream(s.x + ux * from, s.y + uy * from, t.x - ux * to, t.y - uy * to)
+  }
+  if (hidden) {
+    const a = (hash(s.w.id) % 628) / 100
+    const ux = Math.cos(a)
+    const uy = Math.sin(a)
+    out += stream(s.x + ux * from, s.y + uy * from, s.x + ux * (from + 22), s.y + uy * (from + 22))
+  }
+  return out
+}
+
+/** Whether the star `a` is one that waits for the star `b`. */
+const waitsFor = (a: Star, b: Star): boolean => groupKeyOf(a.w) === 'agent' && !!a.w.waitsFor?.some(x => x.id === b.w.id)
+
+/**
  * A thread from a system to the one that started it: the parent and the child are tied, in one galaxy or across two.
- * It runs between the stars' edges, not through them, and is not drawn when the parent is not on the screen.
+ * It runs between the stars' edges, not through them, and is not drawn when the parent is not on the screen, nor when one
+ * of the two waits for the other (the line of the wait is then the one drawn between them).
  */
 function tie(s: Star, byId: Map<string, Star>): string {
   const p = s.w.parentId ? byId.get(s.w.parentId) : undefined
   if (!p || p === s) return ''
+  if (waitsFor(s, p) || waitsFor(p, s)) return ''
   const d = Math.hypot(s.x - p.x, s.y - p.y)
   const a = p.r * 1.6
   const b = s.r * 1.6
@@ -424,6 +511,7 @@ function build(rooms: Room[], now: number, cap: number, selectedId: string): Sce
       colorGlows.add(c)
       return `url(#g${c.slice(1)})`
     },
+    by: new Map(),
   }
 
   const spots: Spot[] = []
@@ -451,15 +539,25 @@ function build(rooms: Room[], now: number, cap: number, selectedId: string): Sce
   })
 
   const byId = new Map(stars.map(s => [s.w.id, s]))
+  // who waits for whom: a star that is waited for carries a ring, and its tooltip names those that wait
+  for (const s of stars) {
+    if (groupKeyOf(s.w) !== 'agent') continue
+    const seen = new Set<string>()
+    for (const x of s.w.waitsFor ?? []) {
+      if (x.id === s.w.id || !byId.has(x.id) || seen.has(x.id)) continue
+      seen.add(x.id)
+      ctx.by.set(x.id, [...(ctx.by.get(x.id) ?? []), s.w.title])
+    }
+  }
   let rays = ''
   let fg = ''
   let top = ''
   for (const s of stars) {
-    rays += tie(s, byId) + waits(s, byId)
+    rays += tie(s, byId) + waits(s, byId, ctx)
     // the chosen one is drawn last, so its orbits lie over the stars beside it
     if (s.w.id === selectedId) top = star(s, ctx)
     else fg += star(s, ctx)
-    spots.push({ id: s.w.id, x: n1(s.x), y: n1(s.y), tip: tipOf(s.w) })
+    spots.push({ id: s.w.id, x: n1(s.x), y: n1(s.y), tip: tipOf(s.w, ctx.by.get(s.w.id)) })
   }
   fg += top
   colorGlows.add(AMBER)

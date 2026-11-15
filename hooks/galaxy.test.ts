@@ -132,10 +132,115 @@ test('a beacon opens wider the longer the person has been kept waiting', () => {
 test('a session waiting for another is joined to its star when that star is on the screen', () => {
   const ws = [w('a', 'work'), w('b', 'rest', { waitsFor: [{ id: 'a', title: 'a' }] })]
   const { svg } = galaxySvg([room('r', ws)], NOW)
-  expect(svg).toMatch(/data-k="wait" d="M[\d. ]+Q[\d. -]+"/)
+  expect(svg).toMatch(/data-k="wait" d="M[\d. -]+L[\d. -]+"/)
   // across galaxies too
   const across = galaxySvg([room('r1', [w('a')]), room('r2', [w('b', 'rest', { waitsFor: [{ id: 'a', title: 'a' }] })])], NOW).svg
-  expect(across).toMatch(/data-k="wait" d="M[\d. ]+Q/)
+  expect(across).toMatch(/data-k="wait" d="M[\d. -]+L/)
+})
+
+test('a session that waits is joined to every star it waits for, by a line in the colour of the wait that ends in an arrow', () => {
+  const ws = [
+    w('a', 'work'),
+    w('c', 'work'),
+    w('b', 'rest', { waitsFor: [{ id: 'a', title: 'a' }, { id: 'c', title: 'c' }] }),
+  ]
+  const { svg } = galaxySvg([room('r', ws)], NOW)
+  expect(count(svg, /data-k="wait"/g)).toBe(2)
+  expect(count(svg, /data-k="wait-head"/g)).toBe(2)
+  expect(svg.match(/data-k="wait" [^>]*stroke="([^"]+)"/)![1]).toBe(GROUP_COLOR.agent)
+  // a dashed ring that turns on the one that waits, a solid one on each that is waited for, and on no one else
+  expect(star(svg, 'b')).toContain('data-k="waiting"')
+  expect(star(svg, 'b')).not.toContain('data-k="awaited"')
+  for (const id of ['a', 'c']) {
+    expect(star(svg, id)).toContain('data-k="awaited"')
+    expect(star(svg, id)).not.toContain('data-k="waiting"')
+  }
+  const quiet = galaxySvg([room('r', [w('a', 'work'), w('d', 'wait'), w('i', 'rest')])], NOW).svg
+  expect(quiet).not.toContain('data-k="waiting"')
+  expect(quiet).not.toContain('data-k="awaited"')
+})
+
+test('the line runs from the ring of the one that waits to the ring of the one waited for, the tip of its arrow on that ring', () => {
+  const out = galaxySvg([room('r', [w('a', 'work'), w('b', 'rest', { waitsFor: [{ id: 'a', title: 'a' }] })])], NOW)
+  const at = (id: string) => out.spots.find(s => s.id === id)!
+  const ringOf = (id: string, k: string) => Number(star(out.svg, id).match(new RegExp(`data-k="${k}"[^>]* r="([\\d.]+)"`))![1])
+  const away = (m: RegExpMatchArray, id: string) => Math.hypot(Number(m[1]) - at(id).x, Number(m[2]) - at(id).y)
+  const line = out.svg.match(/data-k="wait" d="M([\d.-]+) ([\d.-]+)L/)!
+  const head = out.svg.match(/data-k="wait-head" d="M([\d.-]+) ([\d.-]+)L/)!
+  expect(Math.abs(away(line, 'b') - ringOf('b', 'waiting'))).toBeLessThan(0.3)
+  expect(Math.abs(away(head, 'a') - ringOf('a', 'awaited'))).toBeLessThan(0.3)
+  // outside the arcs that turn round a working star
+  expect(ringOf('a', 'awaited')).toBeGreaterThan(ringOf('a', 'spin') + 2)
+})
+
+test('the ring of a star that is waited for lies outside the ring of its plan', () => {
+  const rooms = [
+    room('r1', [w('a', 'work', { plan: [D, N] }), w('b', 'rest', { waitsFor: [{ id: 'a', title: 'a' }] })]),
+    room('r2', [w('c')]),
+  ]
+  const a = star(galaxySvg(rooms, NOW).svg, 'a')
+  const plan = Number(a.match(/data-p="d" d="M[\d.]+ [\d.]+A([\d.]+) /)![1])
+  const ring = Number(a.match(/data-k="awaited"[^>]* r="([\d.]+)"/)![1])
+  expect(ring).toBeGreaterThan(plan + 2.5)
+})
+
+test('a session that waits and is waited for has both rings, the dashed one outside the solid one', () => {
+  const ws = [
+    w('a', 'work'),
+    w('b', 'rest', { waitsFor: [{ id: 'a', title: 'a' }] }),
+    w('c', 'rest', { waitsFor: [{ id: 'b', title: 'b' }] }),
+  ]
+  const b = star(galaxySvg([room('r', ws)], NOW).svg, 'b')
+  const ringOf = (k: string) => Number(b.match(new RegExp(`data-k="${k}"[^>]* r="([\\d.]+)"`))![1])
+  expect(Math.abs(ringOf('waiting') - ringOf('awaited') - 3.5)).toBeLessThan(0.15)
+})
+
+test('what a session waits for and is not on the screen is one short arrow out of it, besides the lines to those that are', () => {
+  const ws = [w('a', 'work'), w('b', 'rest', { waitsFor: [{ id: 'a', title: 'a' }, { id: 'z', title: 'z' }, { id: 'y', title: 'y' }] })]
+  const { svg } = galaxySvg([room('r', ws)], NOW)
+  expect(count(svg, /data-k="wait"/g)).toBe(2)
+  expect(count(svg, /data-k="wait-head"/g)).toBe(2)
+})
+
+test('a session that waits for the one it started has the line of the wait between them, not the thread of the tie as well', () => {
+  const ws = [w('p', 'rest', { waitsFor: [{ id: 'k', title: 'k' }] }), w('k', 'work', { parentId: 'p' })]
+  const { svg } = galaxySvg([room('r', ws)], NOW)
+  expect(count(svg, /data-k="tie"/g)).toBe(0)
+  expect(count(svg, /data-k="wait"/g)).toBe(1)
+})
+
+test('a tooltip says what a session waits for, and who waits for a star', () => {
+  const ws = [w('a', 'work', { title: 'Розвідка' }), w('b', 'rest', { title: 'Звіт', waitsFor: [{ id: 'a', title: 'Розвідка' }] })]
+  const out = galaxySvg([room('r', ws)], NOW)
+  const tip = (id: string) => out.spots.find(s => s.id === id)!.tip
+  expect(tip('b')).toBe('Звіт — чекає: Розвідка')
+  expect(tip('a')).toBe('Розвідка — працює · чекають на нього: Звіт')
+  expect(star(out.svg, 'a')).toContain('<title>Розвідка — працює · чекають на нього: Звіт</title>')
+})
+
+test('a working star held up by an MCP tool has a diamond going round it, far out; no other star has', () => {
+  const mcp = { server: 'Claude_Browser', tool: 'browser_batch' }
+  const ws = [w('a', 'work', { mcp }), w('b', 'work'), w('c', 'rest', { mcp }), w('d', 'work', { needsAnswer: true, mcp })]
+  const { svg } = galaxySvg([room('r', ws), room('q', [w('x')])], NOW)
+  const a = star(svg, 'a')
+  expect(count(a, /data-k="mcp"/g)).toBe(1)
+  expect(a).toMatch(/data-k="mcp"[^>]*fill="#A98BE0"/)
+  expect(a).toContain('dur="7s"')
+  // on a track well outside the arcs that turn round a working star
+  const gap = (s: string) =>
+    Number(s.match(/ r="([\d.]+)" fill="none" stroke="#A98BE0" stroke-width="0.6"/)![1]) - Number(s.match(/data-k="spin"[^>]* r="([\d.]+)"/)![1])
+  expect(gap(a)).toBeGreaterThan(8)
+  // the planets of a chosen system are open and their first orbit is near: the track comes in, and stays outside the arcs
+  const open = gap(star(galaxySvg([room('r', ws), room('q', [w('x')])], NOW, 'a').svg, 'a'))
+  expect(open).toBeGreaterThan(5)
+  expect(open).toBeLessThan(gap(a))
+  // the others are not held up by a tool: one that works freely, one that has stopped, one that waits for the person
+  for (const id of ['b', 'c', 'd']) expect(star(svg, id)).not.toContain('data-k="mcp"')
+})
+
+test('a tooltip names the MCP server and tool a working star is held up by', () => {
+  const out = galaxySvg([room('r', [w('a', 'work', { title: 'Розвідка', mcp: { server: 'Claude_Browser', tool: 'browser_batch' } })])], NOW)
+  expect(out.spots[0]!.tip).toBe('Розвідка — працює · чекає MCP: Claude_Browser · browser_batch')
 })
 
 test('a pull request is a ring round the star, a change of state a flash, the chosen session a target', () => {

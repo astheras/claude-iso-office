@@ -95,6 +95,8 @@ export function classify(raw: RawSession[], prev: Memory, now: number): Classifi
         prNumber: s.prState === 'OPEN' ? s.prNumber : undefined,
         ...(s.needsAnswer ? { needsAnswer: true, ...(s.askedAt ? { askedAt: s.askedAt } : {}) } : {}),
         ...(!s.isRunning && waits(s).length ? { waitsFor: waits(s) } : {}),
+        // only a chat that is running is held up by a tool: for one that has stopped, a call left open is a leftover
+        ...(s.isRunning && s.mcp ? { mcp: s.mcp } : {}),
         // a running chat is past its failed turn: only one that has stopped is in error
         ...(s.error && !s.isRunning ? { error: s.error } : {}),
         parentId: s.startedBy && ids.has(s.startedBy) ? s.startedBy : undefined,

@@ -203,6 +203,14 @@ test('a chat waits for the colleague it asked, as well as for chats it started, 
   expect(groupSessions(out.rooms)[0]!.key).toBe('agent')
 })
 
+test('a running chat carries the MCP call it is held up by; a stopped one does not (a call left open there is a leftover)', () => {
+  const mcp = { server: 'Claude_Browser', tool: 'browser_batch', at: NOW - 60_000 }
+  const out = classify([s('run', { isRunning: true, mcp }), s('stopped', { mcp })], emptyMemory(), NOW)
+  const byId = Object.fromEntries(out.rooms.flatMap(r => r.workers).map(w => [w.id, w]))
+  expect(byId['run']!.mcp).toEqual(mcp)
+  expect(byId['stopped']!.mcp).toBeUndefined()
+})
+
 test('a project room knows its folder, so that a new session can be started in it; other rooms do not', () => {
   const at = new Date().toISOString()
   const raw = [

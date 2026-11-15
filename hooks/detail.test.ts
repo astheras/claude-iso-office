@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import type { Room, Worker } from '../types'
-import { compact, detailRows, detailScript, dollars, lasting, parseDetail, stateSince, waitsText } from './detail'
+import { compact, detailRows, detailScript, dollars, lasting, mcpName, parseDetail, stateSince, waitsText } from './detail'
 
 const NOW = Date.parse('2026-11-12T12:00:00Z')
 const MIN = 60_000
@@ -131,6 +131,18 @@ test('a wait for Unity names the chat that holds it', () => {
   const w = worker({ kind: 'rest', waitsFor: [{ id: 'f', title: 'Їжа для комплексів', on: 'Unity' }] })
   expect(waitsText(w)).toBe('Unity (Їжа для комплексів)')
   expect(Object.fromEntries(detailRows(w, room, undefined, NOW))['Чекає']).toBe('Unity (Їжа для комплексів)')
+})
+
+test('a chat held up by an MCP tool names the server and the tool in the accordion, and for how long', () => {
+  const w = worker({ kind: 'work', mcp: { server: 'Claude_Browser', tool: 'browser_batch', at: NOW - 3 * MIN } })
+  expect(mcpName(w.mcp!)).toBe('Claude_Browser · browser_batch')
+  const row = (x: Worker) => Object.fromEntries(detailRows(x, room, undefined, NOW))['Чекає MCP']
+  expect(row(w)).toBe('Claude_Browser · browser_batch · 3 хв')
+  // without the time of the call, the name alone
+  expect(row(worker({ kind: 'work', mcp: { server: 's', tool: 't' } }))).toBe('s · t')
+  // a question to the person is another wait, and a chat held up by nothing has no row
+  expect(row({ ...w, needsAnswer: true })).toBeUndefined()
+  expect(row(worker({ kind: 'work' }))).toBeUndefined()
 })
 
 test('a chat with a task list shows how far it has got, then each step with its mark', () => {

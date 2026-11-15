@@ -2,9 +2,9 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, Timer } from 'claude-code'
 
 import type { Detail, DetailState, ErrorCache, Memory, Office, RawSession, Room, SketchCache, View, Worker } from '../types'
-import { ack, ago, agoText, classify, emptyMemory, groupSessions, parseSessions, RED, summary, WORD } from './data'
+import { ack, ago, agoText, classify, emptyMemory, GROUP_COLOR, groupSessions, parseSessions, RED, summary, WORD } from './data'
 import type { Group } from './data'
-import { detailRows, detailScript, parseDetail, waitsText } from './detail'
+import { detailRows, detailScript, mcpName, parseDetail, waitsText } from './detail'
 import { errorLabel, errorOf, errorsScript, needsCheck, nextCache, parseErrors, parsePeers, peerOf, waitOf } from './errors'
 import { floorSvg } from './floor'
 import { galaxySvg, REST_COLOR, steady } from './galaxy'
@@ -603,6 +603,11 @@ export const register: Register = on => {
           {waitsText(w) && !w.error && !w.needsAnswer && (
             <Box paddingLeft={2}>
               <Text color={g.color}>{`чекає: ${waitsText(w)}`}</Text>
+            </Box>
+          )}
+          {w.mcp && !w.needsAnswer && (
+            <Box paddingLeft={2}>
+              <Text color={GROUP_COLOR.agent}>{`чекає MCP: ${mcpName(w.mcp)}`}</Text>
             </Box>
           )}
           {isOpen && accordion(w, r)}

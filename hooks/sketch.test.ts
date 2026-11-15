@@ -180,3 +180,34 @@ test('the look of the cache follows the context step', () => {
   expect(sketchLook(a)).toBe(sketchLook(b))
   expect(sketchLook(a)).not.toBe(sketchLook(c))
 })
+
+// the call a transcript ends on, as the script prints it
+const MCP = { name: 'mcp__Claude_Browser__browser_batch', at: '2026-11-13T11:55:00.000Z' }
+
+test('a call to an MCP tool that nothing has answered is read as a server and a tool, with the time it was made', () => {
+  expect(parseSketches(piece({ mcp: MCP })).a!.mcp).toEqual({ server: 'Claude_Browser', tool: 'browser_batch', at: Date.parse(MCP.at) })
+  // a server name may have underscores: the first double underscore divides it from the tool
+  expect(parseSketches(piece({ mcp: { name: 'mcp__ccd_session_mgmt__send_message' } })).a!.mcp).toEqual({ server: 'ccd_session_mgmt', tool: 'send_message' })
+  // the call of any other tool, or something that is not a call, is nothing
+  for (const bad of [{ name: 'Bash' }, { name: 'mcp__nothing' }, 'mcp__a__b', 5, null]) expect(parseSketches(piece({ mcp: bad })).a!.mcp).toBeUndefined()
+})
+
+test('the wait is the state at the end of the transcript: each read replaces it, and a read with no wait clears it', () => {
+  const s = raw('a', { isRunning: true })
+  const waiting = nextSketches({}, [s], [s], parseSketches(piece({ mcp: MCP })))
+  expect(waiting.a!.mcp).toEqual({ server: 'Claude_Browser', tool: 'browser_batch', at: Date.parse(MCP.at) })
+  expect(withSketches([s], waiting)[0]!.mcp).toEqual(waiting.a!.mcp)
+  const after = nextSketches(waiting, [s], [s], parseSketches(piece({ from: 100, offset: 120, size: 120 })))
+  expect(after.a!.mcp).toBeUndefined()
+  expect(withSketches([s], after)[0]!.mcp).toBeUndefined()
+  // the drawing is made again when a wait comes or goes
+  expect(sketchLook(waiting)).not.toBe(sketchLook(after))
+})
+
+test('the script looks at the end of the chat for a call to an MCP tool that has not been answered', () => {
+  const script = sketchScript([{ id: 'a', offset: 0 }])
+  expect(script).toContain('mcp__')
+  expect(script).toContain('tool_use_id')
+  expect(script).toContain('mcp = $mcp')
+  expect(script.includes('"')).toBe(false)
+})

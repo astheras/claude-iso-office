@@ -552,9 +552,13 @@ test('a star shows its name in a card of the pane while the pointer is on it', a
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
   await new Promise(r => (globalThis as any).setTimeout(r, 200))
 
-  const cards = (await ui.findAll({ type: 'Svg' })).filter((x: any) => x.props.source.includes('>Chat A — працює</text>'))
+  // chat D waits for chat A: the card of A names who waits (and wraps onto a second line), the card of D says what it waits for
+  const cardOf = async (alt: string) => (await ui.findAll({ type: 'Svg' })).filter((x: any) => x.props.alt === alt)
+  const cards = await cardOf('Chat A — працює · чекають на нього: Chat D')
   expect(cards).toHaveLength(1)
   expect(cards[0].props.source).toContain('rx="12"')
   expect(cards[0].props.source).toContain('stroke="#FFFFFF"')
+  expect(cards[0].props.source).toContain('>Chat A — працює · чекають на</text>')
+  expect(await cardOf('Chat D — чекає: Unity (Chat A)')).toHaveLength(1)
   await ui.unmount()
 })

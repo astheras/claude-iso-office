@@ -14,6 +14,9 @@ export type SessionError = {
 /** What a chat is waiting for from another one: the chat, and what it is about ("Unity"), when that is known. */
 export type WaitItem = { id: string; title: string; on?: string }
 
+/** A chat that is running but held up by a call to a tool of an MCP server that has not returned: which server and tool, and since when (ms). */
+export type McpWait = { server: string; tool: string; at?: number }
+
 /** A request a chat sent to a colleague chat that has not been answered: who it went to and what it said. */
 export type PeerAsk = { to: string; id: string; text: string; at: number }
 
@@ -41,6 +44,8 @@ export type RawSession = {
   waitsFor?: WaitItem[]
   /** the statuses of the chat's task list, in order (read from its transcript) */
   plan?: PlanStatus[]
+  /** the call to an MCP tool its transcript ends on, not yet answered */
+  mcp?: McpWait
   /** how big its output and its cache are, in steps (read from its transcript) */
   weight?: { size: number; haze: number }
 }
@@ -70,6 +75,8 @@ export type Worker = {
   parentId?: string
   /** the statuses of its task list, in order; absent when it has none or it is not known */
   plan?: PlanStatus[]
+  /** it is running, but held up by an MCP tool that has not answered */
+  mcp?: McpWait
   /** how much it has written, 0..4 (steps of the output tokens): the size of its star */
   size?: number
   /** how much it has read from the cache, 0..3: the cloud around its star */
@@ -120,6 +127,8 @@ export type Sketch = {
   cache?: number
   /** how much the chat holds in its context: what its last reply was given to read */
   context?: number
+  /** the MCP call the transcript ended on at that read, if it had not been answered */
+  mcp?: McpWait
 }
 
 export type SketchCache = Record<string, Sketch>

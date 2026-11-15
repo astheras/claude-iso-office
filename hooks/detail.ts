@@ -1,4 +1,4 @@
-import type { Detail, Room, Worker } from '../types'
+import type { Detail, McpWait, Room, Worker } from '../types'
 import { agoText, WORD } from './data'
 import { errorLabel } from './errors'
 import { PLAN_MARK, planCount, planFrom } from './plan'
@@ -148,6 +148,8 @@ export function detailRows(w: Worker, room: Room, d: Detail | undefined, now: nu
   }
   add('Стан', `${stateWord(w)} · ${lasting(now - stateSince(w, d))}`, w.error ? 'bad' : undefined)
   if (w.waitsFor?.length) add('Чекає', w.waitsFor.map(waitText).join('; '))
+  // a call to an MCP tool that has not answered: which server and which tool, and for how long (a question to the person is not this)
+  if (w.mcp && !w.needsAnswer) add('Чекає MCP', `${mcpName(w.mcp)}${w.mcp.at ? ` · ${lasting(now - w.mcp.at)}` : ''}`)
   if (w.error) {
     add('Помилка', errorLabel(w.error), 'bad')
     add('Повідомлення', w.error.text.length > 200 ? `${w.error.text.slice(0, 200)}…` : w.error.text, 'bad')
@@ -196,6 +198,9 @@ export const stateWord = (w: Worker): string =>
 
 /** One thing a chat waits for: «Unity (Їжа для комплексів)», or just the chat's title. */
 export const waitText = (x: { title: string; on?: string }): string => (x.on ? `${x.on} (${x.title})` : x.title)
+
+/** The tool a running chat is held up by, as a name: «Claude_Browser · browser_batch». */
+export const mcpName = (m: McpWait): string => `${m.server} · ${m.tool}`
 
 /** What a chat waits for, in a line: the first one, and how many more. */
 export const waitsText = (w: Worker): string | undefined => {

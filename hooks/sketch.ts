@@ -1,4 +1,4 @@
-import type { PlanItem, RawSession, Sketch, SketchCache } from '../types'
+import type { McpWait, PlanItem, RawSession, Sketch, SketchCache } from '../types'
 import { HOME_MS } from './data'
 import { planFrom } from './plan'
 
@@ -58,6 +58,13 @@ export function sketchScript(items: { id: string; offset: number }[]): string {
     "$p4 = $q + 'cache_read_input_tokens' + $q",
     "$p5 = $q + 'isSidechain' + $q + ':false'",
     "$p6 = '{' + $q + 'parentUuid' + $q",
+    // the end of the transcript, for a call to an MCP tool that has not been answered: the ids of the answers, and a call
+    "$p7 = $q + 'tool_use_id' + $q + ':' + $q + '([^' + $q + ']+)'",
+    "$p8 = 'tool_use_id'",
+    "$p9 = $q + 'type' + $q + ':' + $q + 'assistant' + $q",
+    "$p11 = $q + 'type' + $q + ':' + $q + 'tool_use' + $q",
+    "$p10 = $p11 + ',' + $q + 'id' + $q + ':' + $q + '([^' + $q + ']+)' + $q + ',' + $q + 'name' + $q + ':' + $q + '(mcp__[^' + $q + ']+)'",
+    "$p12 = $q + 'timestamp' + $q + ':' + $q + '([^' + $q + ']+)'",
     '$res = @{}',
     "foreach ($it in $items.Split(';')) {",
     "  $a = $it.Split(':'); $id = $a[0]; $off = [long]$a[1]",
@@ -96,7 +103,41 @@ export function sketchScript(items: { id: string; offset: number }[]): string {
     '            }',
     '          }',
     '        }',
-    '        $r = @{ from = $off; offset = ($off + $used); size = $len; plan = $plan; cost = $cost; ctx = $ctx }',
+    // Once the chat is read to the end: the last 256 KB, from the end back. The answer to a call (a record with its id) is
+    // seen before the call; a call of the chat's own to an MCP tool that nothing has answered is what it waits on. A text
+    // reply, or more than a few calls of other tools after it, means the turn has gone on: nothing is waited for.
+    '        $mcp = $null',
+    '        if (($off + $used) -ge $len) {',
+    '          $tn = [int][Math]::Min($len, 262144)',
+    "          $f2 = [IO.File]::Open($t.FullName, 'Open', 'Read', 'ReadWrite')",
+    '          $null = $f2.Seek($len - $tn, 0)',
+    '          $tb = New-Object byte[] $tn',
+    '          $tg = $f2.Read($tb, 0, $tn)',
+    '          $f2.Close()',
+    '          $tl = [Text.Encoding]::UTF8.GetString($tb, 0, $tg).Split([char]10)',
+    '          $lo = 0',
+    '          if ($tn -lt $len) { $lo = 1 }',
+    '          $done = @{}; $ns = 0',
+    '          for ($i = $tl.Length - 1; $i -ge $lo; $i--) {',
+    '            $l = $tl[$i]',
+    '            if ($l.Contains($p8)) {',
+    '              $h = $l.Substring(0, [Math]::Min($l.Length, 1500))',
+    '              foreach ($mm in [regex]::Matches($h, $p7)) { $done[$mm.Groups[1].Value] = $true }',
+    '            } elseif ($l.Contains($p5) -and $l.Contains($p9)) {',
+    '              $hit = $null; $any = $false',
+    '              foreach ($mm in [regex]::Matches($l, $p10)) { $any = $true; if (-not $done.ContainsKey($mm.Groups[1].Value)) { $hit = $mm } }',
+    '              if ($hit) {',
+    '                $ts = [regex]::Match($l, $p12)',
+    '                $mcp = @{ name = $hit.Groups[2].Value; at = $ts.Groups[1].Value }',
+    '                break',
+    '              }',
+    '              if (-not $any -and -not $l.Contains($p11)) { break }',
+    '              $ns++',
+    '              if ($ns -ge 4) { break }',
+    '            }',
+    '          }',
+    '        }',
+    '        $r = @{ from = $off; offset = ($off + $used); size = $len; plan = $plan; cost = $cost; ctx = $ctx; mcp = $mcp }',
     '      }',
     '    }',
     '  }',
@@ -106,9 +147,19 @@ export function sketchScript(items: { id: string; offset: number }[]): string {
   ].join('\n')
 }
 
-export type Piece = { none?: boolean; from: number; offset: number; size: number; plan: string[]; cost?: string; ctx?: string }
+export type Piece = { none?: boolean; from: number; offset: number; size: number; plan: string[]; cost?: string; ctx?: string; mcp?: McpWait }
 
 const num = (v: unknown): number | undefined => (typeof v === 'number' && Number.isFinite(v) ? v : undefined)
+
+/** The wait a call that has not returned makes: `mcp__server__tool` read as a server and a tool, and the time the call was made. */
+export function mcpOf(v: unknown): McpWait | undefined {
+  if (!v || typeof v !== 'object') return undefined
+  const { name, at } = v as { name?: unknown; at?: unknown }
+  const m = typeof name === 'string' ? /^mcp__(.+?)__(.+)$/.exec(name) : null
+  if (!m) return undefined
+  const ms = typeof at === 'string' ? Date.parse(at) : NaN
+  return { server: m[1]!, tool: m[2]!, ...(Number.isFinite(ms) ? { at: ms } : {}) }
+}
 
 /** What sketchScript printed, per chat; anything unreadable is nothing. */
 export function parseSketches(stdout: string): Record<string, Piece> {
@@ -131,7 +182,16 @@ export function parseSketches(stdout: string): Record<string, Piece> {
     const size = num(o.size)
     if (offset === undefined || size === undefined) continue
     const plan = typeof o.plan === 'string' ? [o.plan] : Array.isArray(o.plan) ? o.plan.filter((x): x is string => typeof x === 'string') : []
-    out[id] = { from: num(o.from) ?? 0, offset, size, plan, ...(typeof o.cost === 'string' ? { cost: o.cost } : {}), ...(typeof o.ctx === 'string' ? { ctx: o.ctx } : {}) }
+    const mcp = mcpOf(o.mcp)
+    out[id] = {
+      from: num(o.from) ?? 0,
+      offset,
+      size,
+      plan,
+      ...(typeof o.cost === 'string' ? { cost: o.cost } : {}),
+      ...(typeof o.ctx === 'string' ? { ctx: o.ctx } : {}),
+      ...(mcp ? { mcp } : {}),
+    }
   }
   return out
 }
@@ -202,6 +262,8 @@ export function nextSketches(cache: SketchCache, raw: RawSession[], checked: Raw
       ...(outTokens !== undefined ? { out: outTokens } : {}),
       ...(cacheTokens !== undefined ? { cache: cacheTokens } : {}),
       ...(contextTokens !== undefined ? { context: contextTokens } : {}),
+      // not carried on: it is the state at the end of the transcript, read afresh each time the end is reached
+      ...(piece.mcp ? { mcp: piece.mcp } : {}),
     }
   }
   return out
@@ -215,6 +277,7 @@ export function withSketches(raw: RawSession[], cache: SketchCache): RawSession[
     return {
       ...s,
       ...(c.plan?.length ? { plan: c.plan.map(p => p.status) } : {}),
+      ...(c.mcp ? { mcp: c.mcp } : {}),
       ...(c.context !== undefined || c.out !== undefined || c.cache !== undefined
         ? { weight: { size: c.context !== undefined ? contextStep(c.context) : sizeStep(c.out ?? 0), haze: hazeStep(c.cache ?? 0) } }
         : {}),
@@ -226,6 +289,6 @@ export function withSketches(raw: RawSession[], cache: SketchCache): RawSession[
 export const sketchLook = (cache: SketchCache): string =>
   JSON.stringify(
     Object.entries(cache)
-      .map(([id, c]) => [id, c.plan?.map(p => p.status[0]).join(''), c.context !== undefined ? contextStep(c.context) : sizeStep(c.out ?? 0), hazeStep(c.cache ?? 0)])
+      .map(([id, c]) => [id, c.plan?.map(p => p.status[0]).join(''), c.context !== undefined ? contextStep(c.context) : sizeStep(c.out ?? 0), hazeStep(c.cache ?? 0), c.mcp ? `${c.mcp.server}/${c.mcp.tool}` : ''])
       .sort(),
   )
