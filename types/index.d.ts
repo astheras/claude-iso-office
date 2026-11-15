@@ -17,6 +17,12 @@ export type WaitItem = { id: string; title: string; on?: string }
 /** A chat that is running but held up by a call to a tool of an MCP server that has not returned: which server and tool, and since when (ms). */
 export type McpWait = { server: string; tool: string; at?: number }
 
+/**
+ * Work a chat started in the background and has not been told is over: a command run in the background, or a monitor.
+ * `what` is its description; `mcp` says the command goes to an MCP server (its text names one); `at` is when it began (ms).
+ */
+export type BgTask = { id: string; kind: 'bash' | 'monitor'; what: string; at?: number; mcp?: boolean }
+
 /** A request a chat sent to a colleague chat that has not been answered: who it went to and what it said. */
 export type PeerAsk = { to: string; id: string; text: string; at: number }
 
@@ -46,6 +52,8 @@ export type RawSession = {
   plan?: PlanStatus[]
   /** the call to an MCP tool its transcript ends on, not yet answered */
   mcp?: McpWait
+  /** what it started in the background and is still open, read from its transcript */
+  tasks?: BgTask[]
   /** how big its output and its cache are, in steps (read from its transcript) */
   weight?: { size: number; haze: number }
 }
@@ -77,6 +85,8 @@ export type Worker = {
   plan?: PlanStatus[]
   /** it is running, but held up by an MCP tool that has not answered */
   mcp?: McpWait
+  /** it has stopped, but what it started in the background is still going: it waits for that */
+  tasks?: BgTask[]
   /** how much it has written, 0..4 (steps of the output tokens): the size of its star */
   size?: number
   /** how much it has read from the cache, 0..3: the cloud around its star */
@@ -129,6 +139,8 @@ export type Sketch = {
   context?: number
   /** the MCP call the transcript ended on at that read, if it had not been answered */
   mcp?: McpWait
+  /** the tasks started in the background that are still open, as of the end of what was read */
+  tasks?: BgTask[]
 }
 
 export type SketchCache = Record<string, Sketch>

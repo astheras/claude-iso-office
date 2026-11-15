@@ -1,6 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import { ack, classify, emptyMemory, groupSessions, HOME_MS, parseSessions, roomOf, summary, WAIT_MS } from './data'
+import { MAX_TASK_MS } from './tasks'
 import type { RawSession } from '../types'
 
 const NOW = Date.parse('2026-11-12T12:00:00Z')
@@ -209,6 +210,34 @@ test('a running chat carries the MCP call it is held up by; a stopped one does n
   const byId = Object.fromEntries(out.rooms.flatMap(r => r.workers).map(w => [w.id, w]))
   expect(byId['run']!.mcp).toEqual(mcp)
   expect(byId['stopped']!.mcp).toBeUndefined()
+})
+
+test('a stopped chat whose background tasks are still going waits for them, in a list of its own; a running one, an old task and a chat in error or asking do not', () => {
+  const task = (id: string, at = NOW - 60_000) => ({ id, kind: 'bash' as const, what: `task ${id}`, at })
+  const out = classify(
+    [
+      s('idle', { tasks: [task('t1')] }),
+      s('busy', { isRunning: true, tasks: [task('t2')] }),
+      s('old', { tasks: [task('t3', NOW - MAX_TASK_MS - 1)] }),
+      s('failed', { tasks: [task('t4')], error: { code: 'x', text: 'e', at: NOW } }),
+      s('asks', { tasks: [task('t5')], needsAnswer: true }),
+    ],
+    emptyMemory(),
+    NOW,
+  )
+  const byId = Object.fromEntries(out.rooms.flatMap(r => r.workers).map(w => [w.id, w]))
+  expect(byId['idle']!.tasks!.map(t => t.id)).toEqual(['t1'])
+  // while a chat runs, what it started is its own work; a task that old is taken for lost
+  expect(byId['busy']!.tasks).toBeUndefined()
+  expect(byId['old']!.tasks).toBeUndefined()
+  // an error and a question to the person outrank it, but the tasks are still known
+  expect(groupSessions(out.rooms).map(g => [g.key, g.items.map(x => x.w.id)])).toEqual([
+    ['err', ['failed']],
+    ['ask', ['asks']],
+    ['task', ['idle']],
+    ['work', ['busy']],
+  ])
+  expect(byId['failed']!.tasks).toHaveLength(1)
 })
 
 test('a project room knows its folder, so that a new session can be started in it; other rooms do not', () => {

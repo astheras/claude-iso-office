@@ -4,7 +4,7 @@ import type { EngineInterface, Register, Timer } from 'claude-code'
 import type { Detail, DetailState, ErrorCache, Memory, Office, RawSession, Room, SketchCache, View, Worker } from '../types'
 import { ack, ago, agoText, classify, emptyMemory, GROUP_COLOR, groupSessions, parseSessions, RED, summary, WORD } from './data'
 import type { Group } from './data'
-import { detailRows, detailScript, mcpName, parseDetail, waitsText } from './detail'
+import { detailRows, detailScript, mcpName, parseDetail, tasksText, waitsText } from './detail'
 import { errorLabel, errorOf, errorsScript, needsCheck, nextCache, parseErrors, parsePeers, peerOf, waitOf } from './errors'
 import { floorSvg } from './floor'
 import { galaxySvg, REST_COLOR, steady } from './galaxy'
@@ -307,7 +307,7 @@ function pollSoon($: EngineInterface) {
 const open = ($: EngineInterface) => $.ui.open({ id: PANE, title: TITLE })
 
 const MARK = { work: '▶', wait: '!', rest: '·', home: '' } as const
-const GROUP_MARK = { err: '✕', ask: '?', agent: '…', work: '▶', done: '!', rest: '·' } as const
+const GROUP_MARK = { err: '✕', ask: '?', agent: '…', task: '…', work: '▶', done: '!', rest: '·' } as const
 // icons as plain glyphs, where there is no drawing to hold their tooltips
 const GLYPH: Record<IconKind, string> = { open: '↗', seen: '✓', add: '+' }
 
@@ -608,6 +608,11 @@ export const register: Register = on => {
           {w.mcp && !w.needsAnswer && (
             <Box paddingLeft={2}>
               <Text color={GROUP_COLOR.agent}>{`чекає MCP: ${mcpName(w.mcp)}`}</Text>
+            </Box>
+          )}
+          {!!w.tasks?.length && !w.error && !w.needsAnswer && (
+            <Box paddingLeft={2}>
+              <Text color={GROUP_COLOR.task}>{`чекає фонову задачу: ${tasksText(w)}`}</Text>
             </Box>
           )}
           {isOpen && accordion(w, r)}

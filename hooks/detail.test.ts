@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import type { Room, Worker } from '../types'
-import { compact, detailRows, detailScript, dollars, lasting, mcpName, parseDetail, stateSince, waitsText } from './detail'
+import { compact, detailRows, detailScript, dollars, lasting, mcpName, parseDetail, stateSince, tasksText, waitsText } from './detail'
 
 const NOW = Date.parse('2026-11-12T12:00:00Z')
 const MIN = 60_000
@@ -143,6 +143,24 @@ test('a chat held up by an MCP tool names the server and the tool in the accordi
   // a question to the person is another wait, and a chat held up by nothing has no row
   expect(row({ ...w, needsAnswer: true })).toBeUndefined()
   expect(row(worker({ kind: 'work' }))).toBeUndefined()
+})
+
+test('a stopped chat names each task it waits for in the background, what kind it is, and for how long', () => {
+  const w = worker({
+    kind: 'rest',
+    tasks: [
+      { id: 'a', kind: 'bash', what: 'Run the stand', at: NOW - 14 * MIN, mcp: true },
+      { id: 'b', kind: 'monitor', what: 'Wait for the stand', at: NOW - 7 * MIN },
+    ],
+  })
+  expect(tasksText(w)).toBe('Run the stand (MCP) і ще 1')
+  const rows = detailRows(w, room, undefined, NOW)
+  expect(rows.filter(r => r[0] === 'Чекає задачу').map(r => r[1])).toEqual(['Run the stand (фонова команда, MCP) · 14 хв', 'Wait for the stand (монітор) · 7 хв'])
+  expect(Object.fromEntries(rows)['Стан']).toMatch(/^чекає фонову задачу/)
+  expect(tasksText(worker())).toBeUndefined()
+  // a task with no time says no time
+  const bare = worker({ kind: 'rest', tasks: [{ id: 'c', kind: 'bash', what: 'Run' }] })
+  expect(Object.fromEntries(detailRows(bare, room, undefined, NOW))['Чекає задачу']).toBe('Run (фонова команда)')
 })
 
 test('a chat with a task list shows how far it has got, then each step with its mark', () => {

@@ -1,4 +1,5 @@
 import type { Kind, Memory, RawSession, Room, Worker } from '../types'
+import { openTasks } from './tasks'
 
 export const WAIT_MS = 30 * 60 * 1000
 /** Idle this long and a session goes home; a project with no session newer than this is not drawn at all. */
@@ -97,6 +98,8 @@ export function classify(raw: RawSession[], prev: Memory, now: number): Classifi
         ...(!s.isRunning && waits(s).length ? { waitsFor: waits(s) } : {}),
         // only a chat that is running is held up by a tool: for one that has stopped, a call left open is a leftover
         ...(s.isRunning && s.mcp ? { mcp: s.mcp } : {}),
+        // and only a chat that has stopped waits for what it started in the background (while it runs, that is its own work)
+        ...(!s.isRunning && openTasks(s.tasks, now).length ? { tasks: openTasks(s.tasks, now) } : {}),
         // a running chat is past its failed turn: only one that has stopped is in error
         ...(s.error && !s.isRunning ? { error: s.error } : {}),
         parentId: s.startedBy && ids.has(s.startedBy) ? s.startedBy : undefined,
@@ -137,7 +140,7 @@ export function ack(mem: Memory, id: string): Memory {
   return { ...mem, sessions: { ...mem.sessions, [id]: { ...one, isAcked: true } } }
 }
 
-export type GroupKey = 'err' | 'ask' | 'agent' | 'work' | 'done'
+export type GroupKey = 'err' | 'ask' | 'agent' | 'task' | 'work' | 'done'
 
 export const RED = '#E5534B'
 
@@ -149,6 +152,8 @@ const GROUP_DEFS: { key: GroupKey; title: string; color: string; has: (w: Worker
   { key: 'err', title: 'З помилкою', color: RED, has: w => !!w.error },
   { key: 'ask', title: 'Потребують відповіді', color: '#E8943A', has: w => !w.error && !!w.needsAnswer },
   { key: 'agent', title: 'Чекають іншого агента', color: '#A98BE0', has: w => !w.error && !w.needsAnswer && !!w.waitsFor },
+  // stopped, but what it started in the background (a command, a monitor) is still going: the colour of a wait
+  { key: 'task', title: 'Чекають фонову задачу', color: '#A98BE0', has: w => !w.error && !w.needsAnswer && !w.waitsFor && w.kind !== 'work' && !!w.tasks?.length },
   { key: 'work', title: 'У роботі', color: '#6FA8DC', has: w => !w.error && !w.needsAnswer && !w.waitsFor && w.kind === 'work' },
   { key: 'done', title: 'Завершені, чекають', color: '#7FBF8E', has: w => !w.error && !w.needsAnswer && !w.waitsFor && w.kind === 'wait' },
 ]

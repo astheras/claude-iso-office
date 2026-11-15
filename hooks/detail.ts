@@ -1,4 +1,4 @@
-import type { Detail, McpWait, Room, Worker } from '../types'
+import type { BgTask, Detail, McpWait, Room, Worker } from '../types'
 import { agoText, WORD } from './data'
 import { errorLabel } from './errors'
 import { PLAN_MARK, planCount, planFrom } from './plan'
@@ -150,6 +150,8 @@ export function detailRows(w: Worker, room: Room, d: Detail | undefined, now: nu
   if (w.waitsFor?.length) add('Чекає', w.waitsFor.map(waitText).join('; '))
   // a call to an MCP tool that has not answered: which server and which tool, and for how long (a question to the person is not this)
   if (w.mcp && !w.needsAnswer) add('Чекає MCP', `${mcpName(w.mcp)}${w.mcp.at ? ` · ${lasting(now - w.mcp.at)}` : ''}`)
+  // what it started in the background and is still going: each task, what it is, and for how long
+  for (const t of w.tasks ?? []) add('Чекає задачу', `${taskText(t)}${t.at ? ` · ${lasting(now - t.at)}` : ''}`)
   if (w.error) {
     add('Помилка', errorLabel(w.error), 'bad')
     add('Повідомлення', w.error.text.length > 200 ? `${w.error.text.slice(0, 200)}…` : w.error.text, 'bad')
@@ -194,13 +196,31 @@ export function detailRows(w: Worker, room: Room, d: Detail | undefined, now: nu
 
 /** The word for the group a chat is listed in, for the "state" line. */
 export const stateWord = (w: Worker): string =>
-  w.error ? 'помилка' : w.needsAnswer ? 'чекає відповіді' : w.waitsFor ? 'чекає іншого агента' : WORD[w.kind]
+  w.error
+    ? 'помилка'
+    : w.needsAnswer
+      ? 'чекає відповіді'
+      : w.waitsFor
+        ? 'чекає іншого агента'
+        : w.tasks?.length
+          ? 'чекає фонову задачу'
+          : WORD[w.kind]
 
 /** One thing a chat waits for: «Unity (Їжа для комплексів)», or just the chat's title. */
 export const waitText = (x: { title: string; on?: string }): string => (x.on ? `${x.on} (${x.title})` : x.title)
 
 /** The tool a running chat is held up by, as a name: «Claude_Browser · browser_batch». */
 export const mcpName = (m: McpWait): string => `${m.server} · ${m.tool}`
+
+/** One task a chat started in the background: its description, and what kind it is («монітор», «фонова команда», «MCP»). */
+export const taskText = (t: BgTask): string => `${t.what} (${[t.kind === 'monitor' ? 'монітор' : 'фонова команда', t.mcp ? 'MCP' : ''].filter(Boolean).join(', ')})`
+
+/** What a stopped chat waits for in the background, in a line: the first task, and how many more. */
+export const tasksText = (w: Worker): string | undefined => {
+  if (!w.tasks?.length) return undefined
+  const [first, ...more] = w.tasks
+  return `${first!.what}${first!.mcp ? ' (MCP)' : ''}${more.length ? ` і ще ${more.length}` : ''}`
+}
 
 /** What a chat waits for, in a line: the first one, and how many more. */
 export const waitsText = (w: Worker): string | undefined => {

@@ -243,6 +243,28 @@ test('a tooltip names the MCP server and tool a working star is held up by', () 
   expect(out.spots[0]!.tip).toBe('Розвідка — працює · чекає MCP: Claude_Browser · browser_batch')
 })
 
+test('a stopped star whose background tasks are still going has the diamond of a wait going round it, and the colour of its list', () => {
+  const tasks = [
+    { id: 't1', kind: 'bash' as const, what: 'Run the stand', mcp: true },
+    { id: 't2', kind: 'monitor' as const, what: 'Wait for the stand' },
+  ]
+  const ws = [w('a', 'rest', { tasks }), w('b', 'work', { tasks }), w('c', 'rest')]
+  const out = galaxySvg([room('r', ws), room('q', [w('x')])], NOW)
+  const a = star(out.svg, 'a')
+  expect(a).toMatch(/data-k="task"[^>]*fill="#A98BE0"/)
+  expect(a).toContain('dur="7s"')
+  expect(a).toContain(`<circle cx="`) // the star itself
+  expect(a).toContain(`r="`)
+  expect(a).toContain(`fill="${GROUP_COLOR.task}"/>`)
+  // a running one has its own work to do, and one with no tasks nothing to wait for
+  for (const id of ['b', 'c']) expect(star(out.svg, id)).not.toContain('data-k="task"')
+  // the wait is its state in the tooltip: the first task, with MCP when it goes to an MCP server, and how many more
+  expect(out.spots.find(x => x.id === 'a')!.tip).toBe('chat a — чекає фонову задачу: Run the stand (MCP) і ще 1')
+  // for a star that is in another list it is said after the state
+  const asking = galaxySvg([room('r', [w('d', 'work', { tasks, needsAnswer: true })])], NOW)
+  expect(asking.spots[0]!.tip).toBe('chat d — працює · чекає фонову задачу: Run the stand (MCP) і ще 1')
+})
+
 test('a pull request is a ring round the star, a change of state a flash, the chosen session a target', () => {
   const ws = [w('a', 'work', { prNumber: 7 }), w('b', 'wait', { prevKind: 'work', changedAt: NOW - 3000 }), w('c')]
   const { svg } = galaxySvg([room('r', ws)], NOW, 'c')

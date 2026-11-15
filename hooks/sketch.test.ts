@@ -211,3 +211,48 @@ test('the script looks at the end of the chat for a call to an MCP tool that has
   expect(script).toContain('mcp = $mcp')
   expect(script.includes('"')).toBe(false)
 })
+
+// what the script passes up for the tasks started in the background: the call, the answer that names it, the notice that ends it
+const bgStart = (task: string) => [
+  JSON.stringify({
+    isSidechain: false,
+    type: 'assistant',
+    message: { content: [{ type: 'tool_use', id: `u-${task}`, name: 'Bash', input: { command: 'x', description: `run ${task}`, run_in_background: true } }] },
+    timestamp: '2026-11-13T11:40:00.000Z',
+  }),
+  JSON.stringify({ isSidechain: false, type: 'user', message: { content: [{ tool_use_id: `u-${task}`, type: 'tool_result', content: `Command running in background with ID: ${task}.` }] } }),
+]
+const bgEnd = (task: string) =>
+  JSON.stringify({ isSidechain: false, type: 'user', message: { content: `<task-notification><task-id>${task}</task-id><status>completed</status></task-notification>` } })
+
+test('the tasks a chat started in the background are carried from piece to piece, and a piece that ends one takes it off', () => {
+  const s = raw('a')
+  const one = nextSketches({}, [s], [s], parseSketches(piece({ bg: [...bgStart('t1'), ...bgStart('t2')], offset: 60, size: 100 })))
+  expect(one.a!.tasks!.map(t => t.id)).toEqual(['t1', 't2'])
+  expect(withSketches([s], one)[0]!.tasks!.map(t => t.what)).toEqual(['run t1', 'run t2'])
+  const two = nextSketches(one, [s], [s], parseSketches(piece({ from: 60, offset: 100, size: 100, bg: [bgEnd('t1')] })))
+  expect(two.a!.tasks!.map(t => t.id)).toEqual(['t2'])
+  // a piece with nothing about tasks keeps what was held; read again from the start, it holds nothing of the old
+  const same = nextSketches(two, [s], [s], parseSketches(piece({ from: 100, offset: 120, size: 120 })))
+  expect(same.a!.tasks!.map(t => t.id)).toEqual(['t2'])
+  const again = nextSketches(two, [s], [s], parseSketches(piece({ from: 0, offset: 40, size: 40 })))
+  expect(again.a!.tasks).toBeUndefined()
+  // the last one ended: none
+  const none = nextSketches(two, [s], [s], parseSketches(piece({ from: 100, offset: 120, size: 120, bg: [bgEnd('t2')] })))
+  expect(none.a!.tasks).toBeUndefined()
+  expect(withSketches([s], none)[0]!.tasks).toBeUndefined()
+  // the drawing is made again when a task comes or goes
+  expect(sketchLook(one)).not.toBe(sketchLook(two))
+  expect(sketchLook(two)).not.toBe(sketchLook(none))
+})
+
+test('the lines the script passes up are what begins, names or ends a task; a lone line comes as a string', () => {
+  expect(parseSketches(piece({ bg: 'one line' })).a!.bg).toEqual(['one line'])
+  expect(parseSketches(piece({ bg: ['a', 5, 'b'] })).a!.bg).toEqual(['a', 'b'])
+  expect(parseSketches(piece({})).a!.bg).toBeUndefined()
+  const script = sketchScript([{ id: 'a', offset: 0 }])
+  for (const word of ['run_in_background', 'Monitor', 'TaskStop', 'running in background with ID', 'Monitor started (task', '<task-notification>', 'bg = $bg']) {
+    expect(script).toContain(word)
+  }
+  expect(script.includes('"')).toBe(false)
+})

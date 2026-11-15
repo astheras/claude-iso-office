@@ -1,6 +1,7 @@
 import type { McpWait, PlanItem, RawSession, Sketch, SketchCache } from '../types'
 import { HOME_MS } from './data'
 import { planFrom } from './plan'
+import { tasksFrom } from './tasks'
 
 /**
  * What the galaxies need from every chat on screen: its task list and its tokens. Transcripts run to tens of megabytes
@@ -65,6 +66,13 @@ export function sketchScript(items: { id: string; offset: number }[]): string {
     "$p11 = $q + 'type' + $q + ':' + $q + 'tool_use' + $q",
     "$p10 = $p11 + ',' + $q + 'id' + $q + ':' + $q + '([^' + $q + ']+)' + $q + ',' + $q + 'name' + $q + ':' + $q + '(mcp__[^' + $q + ']+)'",
     "$p12 = $q + 'timestamp' + $q + ':' + $q + '([^' + $q + ']+)'",
+    // work started in the background: the calls that start (or stop) it, the answers that name it, the notices that end it
+    "$pb1 = $q + 'run_in_background' + $q + ':true'",
+    "$pb2 = $q + 'name' + $q + ':' + $q + 'Monitor' + $q",
+    "$pb3 = $q + 'name' + $q + ':' + $q + 'TaskStop' + $q",
+    "$pb4 = 'running in background with ID'",
+    "$pb5 = 'Monitor started (task'",
+    "$pb6 = '<task-notification>'",
     '$res = @{}',
     "foreach ($it in $items.Split(';')) {",
     "  $a = $it.Split(':'); $id = $a[0]; $off = [long]$a[1]",
@@ -81,7 +89,7 @@ export function sketchScript(items: { id: string; offset: number }[]): string {
     '        $len = $t.Length',
     '        if ($off -gt $len) { $off = 0 }',
     '        $n = [int][Math]::Min($len - $off, $max)',
-    '        $used = 0; $plan = @(); $cost = $null; $ctx = $null',
+    '        $used = 0; $plan = @(); $cost = $null; $ctx = $null; $bg = @()',
     '        if ($n -gt 0) {',
     "          $fs = [IO.File]::Open($t.FullName, 'Open', 'Read', 'ReadWrite')",
     '          $null = $fs.Seek($off, 0)',
@@ -99,6 +107,8 @@ export function sketchScript(items: { id: string; offset: number }[]): string {
     '                if ($ln.Contains($p1) -or $ln.Contains($p2)) { $plan += $ln }',
     '                elseif ($ln.StartsWith($p3)) { $cost = $ln }',
     '                elseif ($ln.StartsWith($p6) -and $ln.Contains($p4) -and $ln.Contains($p5)) { $ctx = $ln }',
+    '                if ($ln.Contains($pb6) -or $ln.Contains($pb4) -or $ln.Contains($pb5)) { $bg += $ln }',
+    '                elseif ($ln.Contains($p11) -and ($ln.Contains($pb1) -or $ln.Contains($pb2) -or $ln.Contains($pb3))) { $bg += $ln }',
     '              }',
     '            }',
     '          }',
@@ -121,8 +131,8 @@ export function sketchScript(items: { id: string; offset: number }[]): string {
     '          for ($i = $tl.Length - 1; $i -ge $lo; $i--) {',
     '            $l = $tl[$i]',
     '            if ($l.Contains($p8)) {',
-    '              $h = $l.Substring(0, [Math]::Min($l.Length, 1500))',
-    '              foreach ($mm in [regex]::Matches($h, $p7)) { $done[$mm.Groups[1].Value] = $true }',
+    // the id of an answer may come after its text (a long answer), so the whole line is searched
+    '              foreach ($mm in [regex]::Matches($l, $p7)) { $done[$mm.Groups[1].Value] = $true }',
     '            } elseif ($l.Contains($p5) -and $l.Contains($p9)) {',
     '              $hit = $null; $any = $false',
     '              foreach ($mm in [regex]::Matches($l, $p10)) { $any = $true; if (-not $done.ContainsKey($mm.Groups[1].Value)) { $hit = $mm } }',
@@ -137,7 +147,7 @@ export function sketchScript(items: { id: string; offset: number }[]): string {
     '            }',
     '          }',
     '        }',
-    '        $r = @{ from = $off; offset = ($off + $used); size = $len; plan = $plan; cost = $cost; ctx = $ctx; mcp = $mcp }',
+    '        $r = @{ from = $off; offset = ($off + $used); size = $len; plan = $plan; cost = $cost; ctx = $ctx; mcp = $mcp; bg = $bg }',
     '      }',
     '    }',
     '  }',
@@ -147,7 +157,18 @@ export function sketchScript(items: { id: string; offset: number }[]): string {
   ].join('\n')
 }
 
-export type Piece = { none?: boolean; from: number; offset: number; size: number; plan: string[]; cost?: string; ctx?: string; mcp?: McpWait }
+export type Piece = {
+  none?: boolean
+  from: number
+  offset: number
+  size: number
+  plan: string[]
+  cost?: string
+  ctx?: string
+  mcp?: McpWait
+  /** the lines of the piece that begin, name or end a task started in the background */
+  bg?: string[]
+}
 
 const num = (v: unknown): number | undefined => (typeof v === 'number' && Number.isFinite(v) ? v : undefined)
 
@@ -183,6 +204,7 @@ export function parseSketches(stdout: string): Record<string, Piece> {
     if (offset === undefined || size === undefined) continue
     const plan = typeof o.plan === 'string' ? [o.plan] : Array.isArray(o.plan) ? o.plan.filter((x): x is string => typeof x === 'string') : []
     const mcp = mcpOf(o.mcp)
+    const bg = typeof o.bg === 'string' ? [o.bg] : Array.isArray(o.bg) ? o.bg.filter((x): x is string => typeof x === 'string') : []
     out[id] = {
       from: num(o.from) ?? 0,
       offset,
@@ -191,6 +213,7 @@ export function parseSketches(stdout: string): Record<string, Piece> {
       ...(typeof o.cost === 'string' ? { cost: o.cost } : {}),
       ...(typeof o.ctx === 'string' ? { ctx: o.ctx } : {}),
       ...(mcp ? { mcp } : {}),
+      ...(bg.length ? { bg } : {}),
     }
   }
   return out
@@ -250,6 +273,8 @@ export function nextSketches(cache: SketchCache, raw: RawSession[], checked: Raw
     const held: Sketch | undefined = piece.from === 0 ? undefined : prev
     const start: PlanItem[] | undefined = held?.plan
     const plan = planFrom(piece.plan, start)
+    // what was left open by the earlier pieces goes on, less what this piece ended, plus what it began
+    const tasks = tasksFrom(piece.bg ?? [], held?.tasks)
     const tokens = piece.cost ? tokensOf(piece.cost) : undefined
     const outTokens = tokens?.out ?? held?.out
     const cacheTokens = tokens?.cache ?? held?.cache
@@ -264,6 +289,7 @@ export function nextSketches(cache: SketchCache, raw: RawSession[], checked: Raw
       ...(contextTokens !== undefined ? { context: contextTokens } : {}),
       // not carried on: it is the state at the end of the transcript, read afresh each time the end is reached
       ...(piece.mcp ? { mcp: piece.mcp } : {}),
+      ...(tasks.length ? { tasks } : {}),
     }
   }
   return out
@@ -278,6 +304,7 @@ export function withSketches(raw: RawSession[], cache: SketchCache): RawSession[
       ...s,
       ...(c.plan?.length ? { plan: c.plan.map(p => p.status) } : {}),
       ...(c.mcp ? { mcp: c.mcp } : {}),
+      ...(c.tasks?.length ? { tasks: c.tasks } : {}),
       ...(c.context !== undefined || c.out !== undefined || c.cache !== undefined
         ? { weight: { size: c.context !== undefined ? contextStep(c.context) : sizeStep(c.out ?? 0), haze: hazeStep(c.cache ?? 0) } }
         : {}),
@@ -289,6 +316,6 @@ export function withSketches(raw: RawSession[], cache: SketchCache): RawSession[
 export const sketchLook = (cache: SketchCache): string =>
   JSON.stringify(
     Object.entries(cache)
-      .map(([id, c]) => [id, c.plan?.map(p => p.status[0]).join(''), c.context !== undefined ? contextStep(c.context) : sizeStep(c.out ?? 0), hazeStep(c.cache ?? 0), c.mcp ? `${c.mcp.server}/${c.mcp.tool}` : ''])
+      .map(([id, c]) => [id, c.plan?.map(p => p.status[0]).join(''), c.context !== undefined ? contextStep(c.context) : sizeStep(c.out ?? 0), hazeStep(c.cache ?? 0), c.mcp ? `${c.mcp.server}/${c.mcp.tool}` : '', c.tasks?.map(t => t.id).join(',') ?? ''])
       .sort(),
   )

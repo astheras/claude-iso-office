@@ -1,6 +1,6 @@
 import type { PlanStatus, Room, Worker } from '../types'
 import { GROUP_COLOR, groupKeyOf, HOME_MS, WORD } from './data'
-import { mcpName, waitsText } from './detail'
+import { mcpName, tasksText, waitsText } from './detail'
 import { MAX_ROOMS, SIZE_LIMIT, TRANSITION_MS } from './floor'
 import type { Label, Scene, Spot } from './floor'
 import { esc, hash, n1 } from './iso'
@@ -248,10 +248,15 @@ function planets(s: Star, running: boolean, begin: number): string {
 
 // no time in the tooltip: it would change the drawing every minute, and a changed drawing is drawn afresh (it blinks)
 const tipOf = (w: Worker, by: string[] = []): string => {
-  const waits = groupKeyOf(w) === 'agent' ? waitsText(w) : undefined
+  const key = groupKeyOf(w)
+  const waits = key === 'agent' ? waitsText(w) : undefined
   const named = by.length ? ` · чекають на нього: ${by[0]}${by.length > 1 ? ` і ще ${by.length - 1}` : ''}` : ''
-  const tool = w.mcp && groupKeyOf(w) === 'work' ? ` · чекає MCP: ${mcpName(w.mcp)}` : ''
-  return `${w.title} — ${waits ? `чекає: ${waits}` : WORD[w.kind]}${w.parentId ? ' (стажер)' : ''}${tool}${named}`
+  const tool = w.mcp && key === 'work' ? ` · чекає MCP: ${mcpName(w.mcp)}` : ''
+  // for a chat in the list of those that wait for a task, the wait is its state; for any other (it also waits for the
+  // person, say) it is a thing said after
+  const state = waits ? `чекає: ${waits}` : key === 'task' ? `чекає фонову задачу: ${tasksText(w)}` : WORD[w.kind]
+  const task = w.tasks?.length && key !== 'task' ? ` · чекає фонову задачу: ${tasksText(w)}` : ''
+  return `${w.title} — ${state}${w.parentId ? ' (стажер)' : ''}${tool}${task}${named}`
 }
 
 function star(s: Star, c: Ctx): string {
@@ -318,17 +323,18 @@ function star(s: Star, c: Ctx): string {
       `<circle data-k="spin" cx="${x}" cy="${y}" r="${n1(sr)}" fill="none" stroke="#FFFFFF" stroke-width="2.2" stroke-linecap="round" stroke-dasharray="${n1(dash)} ${n1(len / 2 - dash)}">` +
       `<animateTransform attributeName="transform" type="rotate" values="0 ${x} ${y};360 ${x} ${y}" dur="1.2s" begin="-${phase('1.2s', begin)}s" repeatCount="indefinite"/>` +
       '</circle>'
-    // held up by a tool of an MCP server that has not answered: a small diamond in the colour of a wait goes slowly round,
-    // far out on a faint track (a wait for a tool has no star to be joined to, so no line). Nearer the star when the
-    // planets are open: their first orbit is at r + 17
-    if (w.mcp) {
-      const mr = r + (c.detail || w.id === c.selectedId ? 10.5 : 15)
-      const dx = n1(s.x + mr)
-      g +=
-        `<circle cx="${x}" cy="${y}" r="${n1(mr)}" fill="none" stroke="${PURPLE}" stroke-width="0.6" opacity="0.3"/>` +
-        `<path data-k="mcp" d="M${dx} ${n1(s.y - 3)}L${n1(s.x + mr + 3)} ${y}L${dx} ${n1(s.y + 3)}L${n1(s.x + mr - 3)} ${y}Z" fill="${PURPLE}" stroke="#0A1129" stroke-width="0.8">` +
-        `<animateTransform attributeName="transform" type="rotate" values="0 ${x} ${y};360 ${x} ${y}" dur="7s" begin="-${phase('7s', begin)}s" repeatCount="indefinite"/></path>`
-    }
+  }
+  // held up: a running chat by an MCP tool that has not answered, a stopped one by what it started in the background and
+  // is still waiting for (a command, a monitor). A small diamond in the colour of a wait goes slowly round, far out on a
+  // faint track: there is no star to be joined to, so no line. Nearer the star when the planets are open (their first
+  // orbit is at r + 17)
+  if (running ? w.mcp : w.tasks?.length) {
+    const mr = r + (c.detail || w.id === c.selectedId ? 10.5 : 15)
+    const dx = n1(s.x + mr)
+    g +=
+      `<circle cx="${x}" cy="${y}" r="${n1(mr)}" fill="none" stroke="${PURPLE}" stroke-width="0.6" opacity="0.3"/>` +
+      `<path data-k="${running ? 'mcp' : 'task'}" d="M${dx} ${n1(s.y - 3)}L${n1(s.x + mr + 3)} ${y}L${dx} ${n1(s.y + 3)}L${n1(s.x + mr - 3)} ${y}Z" fill="${PURPLE}" stroke="#0A1129" stroke-width="0.8">` +
+      `<animateTransform attributeName="transform" type="rotate" values="0 ${x} ${y};360 ${x} ${y}" dur="7s" begin="-${phase('7s', begin)}s" repeatCount="indefinite"/></path>`
   }
   g += `<circle cx="${x}" cy="${y}" r="${n1(r)}" fill="${col}"/><circle cx="${x}" cy="${y}" r="${n1(r * (running ? 0.62 : 0.5))}" fill="#FFFFFF" opacity="${running ? 1 : 0.9}"/>`
 
