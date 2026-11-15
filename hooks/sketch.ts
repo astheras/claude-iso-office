@@ -1,5 +1,6 @@
-import type { McpWait, PlanItem, RawSession, Sketch, SketchCache } from '../types'
+import type { Decision, McpWait, PlanItem, RawSession, Sketch, SketchCache } from '../types'
 import { HOME_MS } from './data'
+import { CLAUDE_DIR_PS, transcriptGlobPs } from './paths'
 import { planFrom } from './plan'
 import { tasksFrom } from './tasks'
 
@@ -59,12 +60,13 @@ export function sketchScript(items: { id: string; offset: number }[]): string {
     "$p4 = $q + 'cache_read_input_tokens' + $q",
     "$p5 = $q + 'isSidechain' + $q + ':false'",
     "$p6 = '{' + $q + 'parentUuid' + $q",
-    // the end of the transcript, for a call to an MCP tool that has not been answered: the ids of the answers, and a call
+    // the end of the transcript, for a call to an MCP tool (or a question or a plan put to the person) that has not been
+    // answered: the ids of the answers, and a call
     "$p7 = $q + 'tool_use_id' + $q + ':' + $q + '([^' + $q + ']+)'",
     "$p8 = 'tool_use_id'",
     "$p9 = $q + 'type' + $q + ':' + $q + 'assistant' + $q",
     "$p11 = $q + 'type' + $q + ':' + $q + 'tool_use' + $q",
-    "$p10 = $p11 + ',' + $q + 'id' + $q + ':' + $q + '([^' + $q + ']+)' + $q + ',' + $q + 'name' + $q + ':' + $q + '(mcp__[^' + $q + ']+)'",
+    "$p10 = $p11 + ',' + $q + 'id' + $q + ':' + $q + '([^' + $q + ']+)' + $q + ',' + $q + 'name' + $q + ':' + $q + '(mcp__[^' + $q + ']+|AskUserQuestion|ExitPlanMode)'",
     "$p12 = $q + 'timestamp' + $q + ':' + $q + '([^' + $q + ']+)'",
     // work started in the background: the calls that start (or stop) it, the answers that name it, the notices that end it
     "$pb1 = $q + 'run_in_background' + $q + ':true'",
@@ -74,6 +76,7 @@ export function sketchScript(items: { id: string; offset: number }[]): string {
     "$pb5 = 'Monitor started (task'",
     "$pb6 = '<task-notification>'",
     '$res = @{}',
+    CLAUDE_DIR_PS,
     "foreach ($it in $items.Split(';')) {",
     "  $a = $it.Split(':'); $id = $a[0]; $off = [long]$a[1]",
     '  $r = @{ none = $true }',
@@ -83,7 +86,7 @@ export function sketchScript(items: { id: string; offset: number }[]): string {
     '    $raw = [IO.File]::ReadAllText($m.FullName)',
     "    $c = [regex]::Match($raw, $q + 'cliSessionId' + $q + ':' + $q + '?([^,' + $q + '}]*)')",
     '    if ($c.Success) {',
-    "      $tp = $env:USERPROFILE + '\\.claude\\projects\\*\\' + $c.Groups[1].Value + '.jsonl'",
+    `      $tp = ${transcriptGlobPs('$c.Groups[1].Value')}`,
     '      $t = Get-ChildItem -Path $tp -File | Select-Object -First 1',
     '      if ($t) {',
     '        $len = $t.Length',
@@ -166,6 +169,7 @@ export type Piece = {
   cost?: string
   ctx?: string
   mcp?: McpWait
+  decision?: Decision
   /** the lines of the piece that begin, name or end a task started in the background */
   bg?: string[]
 }
@@ -180,6 +184,16 @@ export function mcpOf(v: unknown): McpWait | undefined {
   if (!m) return undefined
   const ms = typeof at === 'string' ? Date.parse(at) : NaN
   return { server: m[1]!, tool: m[2]!, ...(Number.isFinite(ms) ? { at: ms } : {}) }
+}
+
+/** The decision a call that has not returned puts to the person: `AskUserQuestion` is a question, `ExitPlanMode` a plan to approve. */
+export function decisionOf(v: unknown): Decision | undefined {
+  if (!v || typeof v !== 'object') return undefined
+  const { name, at } = v as { name?: unknown; at?: unknown }
+  const kind = name === 'AskUserQuestion' ? 'question' : name === 'ExitPlanMode' ? 'plan' : undefined
+  if (!kind) return undefined
+  const ms = typeof at === 'string' ? Date.parse(at) : NaN
+  return { kind, ...(Number.isFinite(ms) ? { at: ms } : {}) }
 }
 
 /** What sketchScript printed, per chat; anything unreadable is nothing. */
@@ -204,6 +218,7 @@ export function parseSketches(stdout: string): Record<string, Piece> {
     if (offset === undefined || size === undefined) continue
     const plan = typeof o.plan === 'string' ? [o.plan] : Array.isArray(o.plan) ? o.plan.filter((x): x is string => typeof x === 'string') : []
     const mcp = mcpOf(o.mcp)
+    const decision = decisionOf(o.mcp)
     const bg = typeof o.bg === 'string' ? [o.bg] : Array.isArray(o.bg) ? o.bg.filter((x): x is string => typeof x === 'string') : []
     out[id] = {
       from: num(o.from) ?? 0,
@@ -213,6 +228,7 @@ export function parseSketches(stdout: string): Record<string, Piece> {
       ...(typeof o.cost === 'string' ? { cost: o.cost } : {}),
       ...(typeof o.ctx === 'string' ? { ctx: o.ctx } : {}),
       ...(mcp ? { mcp } : {}),
+      ...(decision ? { decision } : {}),
       ...(bg.length ? { bg } : {}),
     }
   }
@@ -289,6 +305,7 @@ export function nextSketches(cache: SketchCache, raw: RawSession[], checked: Raw
       ...(contextTokens !== undefined ? { context: contextTokens } : {}),
       // not carried on: it is the state at the end of the transcript, read afresh each time the end is reached
       ...(piece.mcp ? { mcp: piece.mcp } : {}),
+      ...(piece.decision ? { decision: piece.decision } : {}),
       ...(tasks.length ? { tasks } : {}),
     }
   }
@@ -304,6 +321,7 @@ export function withSketches(raw: RawSession[], cache: SketchCache): RawSession[
       ...s,
       ...(c.plan?.length ? { plan: c.plan.map(p => p.status) } : {}),
       ...(c.mcp ? { mcp: c.mcp } : {}),
+      ...(c.decision ? { decision: c.decision } : {}),
       ...(c.tasks?.length ? { tasks: c.tasks } : {}),
       ...(c.context !== undefined || c.out !== undefined || c.cache !== undefined
         ? { weight: { size: c.context !== undefined ? contextStep(c.context) : sizeStep(c.out ?? 0), haze: hazeStep(c.cache ?? 0) } }
@@ -316,6 +334,6 @@ export function withSketches(raw: RawSession[], cache: SketchCache): RawSession[
 export const sketchLook = (cache: SketchCache): string =>
   JSON.stringify(
     Object.entries(cache)
-      .map(([id, c]) => [id, c.plan?.map(p => p.status[0]).join(''), c.context !== undefined ? contextStep(c.context) : sizeStep(c.out ?? 0), hazeStep(c.cache ?? 0), c.mcp ? `${c.mcp.server}/${c.mcp.tool}` : '', c.tasks?.map(t => t.id).join(',') ?? ''])
+      .map(([id, c]) => [id, c.plan?.map(p => p.status[0]).join(''), c.context !== undefined ? contextStep(c.context) : sizeStep(c.out ?? 0), hazeStep(c.cache ?? 0), c.mcp ? `${c.mcp.server}/${c.mcp.tool}` : '', c.decision?.kind ?? '', c.tasks?.map(t => t.id).join(',') ?? ''])
       .sort(),
   )

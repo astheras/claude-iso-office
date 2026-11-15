@@ -256,3 +256,36 @@ test('the lines the script passes up are what begins, names or ends a task; a lo
   }
   expect(script.includes('"')).toBe(false)
 })
+
+test('a question or a plan put to the person that nothing has answered is read as a decision, and is not an MCP wait', () => {
+  const at = '2026-11-15T10:00:00.000Z'
+  const ask = parseSketches(piece({ mcp: { name: 'AskUserQuestion', at } })).a!
+  expect(ask.decision).toEqual({ kind: 'question', at: Date.parse(at) })
+  expect(ask.mcp).toBeUndefined()
+  expect(parseSketches(piece({ mcp: { name: 'ExitPlanMode' } })).a!.decision).toEqual({ kind: 'plan' })
+  // a tool that is neither is no decision; an MCP call is no decision
+  for (const other of [{ name: 'Bash' }, { name: 'AskUser' }, MCP, 'AskUserQuestion', 5, null]) {
+    expect(parseSketches(piece({ mcp: other })).a!.decision).toBeUndefined()
+  }
+})
+
+test('the decision is the state at the end of the transcript: a read replaces it, the drawing is made again when it comes or goes', () => {
+  const s = raw('a', { isRunning: true })
+  const asking = nextSketches({}, [s], [s], parseSketches(piece({ mcp: { name: 'ExitPlanMode' } })))
+  expect(asking.a!.decision).toEqual({ kind: 'plan' })
+  expect(withSketches([s], asking)[0]!.decision).toEqual({ kind: 'plan' })
+  const after = nextSketches(asking, [s], [s], parseSketches(piece({ from: 100, offset: 120, size: 120 })))
+  expect(after.a!.decision).toBeUndefined()
+  expect(withSketches([s], after)[0]!.decision).toBeUndefined()
+  expect(sketchLook(asking)).not.toBe(sketchLook(after))
+})
+
+test('the script looks for the two calls that put a decision to the person, and reads the Claude folder from where it may have been moved', () => {
+  const script = sketchScript([{ id: 'a', offset: 0 }])
+  expect(script).toContain('AskUserQuestion')
+  expect(script).toContain('ExitPlanMode')
+  // CLAUDE_CONFIG_DIR first, the home folder after: a folder moved to another disk is still found
+  expect(script).toContain('$env:CLAUDE_CONFIG_DIR')
+  expect(script.indexOf('$env:CLAUDE_CONFIG_DIR')).toBeLessThan(script.indexOf('$env:USERPROFILE'))
+  expect(script.includes('"')).toBe(false)
+})

@@ -95,6 +95,8 @@ export function classify(raw: RawSession[], prev: Memory, now: number): Classifi
         ...(prevKind ? { prevKind } : {}),
         prNumber: s.prState === 'OPEN' ? s.prNumber : undefined,
         ...(s.needsAnswer ? { needsAnswer: true, ...(s.askedAt ? { askedAt: s.askedAt } : {}) } : {}),
+        // a question or a plan put to the person counts only while the chat is blocked on the person: the registry says so
+        ...(s.needsAnswer && s.decision ? { decision: s.decision } : {}),
         ...(!s.isRunning && waits(s).length ? { waitsFor: waits(s) } : {}),
         // only a chat that is running is held up by a tool: for one that has stopped, a call left open is a leftover
         ...(s.isRunning && s.mcp ? { mcp: s.mcp } : {}),
@@ -140,7 +142,7 @@ export function ack(mem: Memory, id: string): Memory {
   return { ...mem, sessions: { ...mem.sessions, [id]: { ...one, isAcked: true } } }
 }
 
-export type GroupKey = 'err' | 'ask' | 'agent' | 'task' | 'work' | 'done'
+export type GroupKey = 'err' | 'decide' | 'ask' | 'agent' | 'task' | 'work' | 'done'
 
 export const RED = '#E5534B'
 
@@ -150,7 +152,10 @@ export type Group = { key: GroupKey; title: string; color: string; items: { w: W
 // light and a dark theme. A chat is in one list only: a failure outranks the rest.
 const GROUP_DEFS: { key: GroupKey; title: string; color: string; has: (w: Worker) => boolean }[] = [
   { key: 'err', title: 'З помилкою', color: RED, has: w => !!w.error },
-  { key: 'ask', title: 'Потребують відповіді', color: '#E8943A', has: w => !w.error && !!w.needsAnswer },
+  // the agent has put a decision to the person (a question with options, a plan to approve): its own list, ahead of the
+  // plain asks (a permission), in a colour of its own so that it is told from them at a glance
+  { key: 'decide', title: 'Чекають рішення', color: '#E879B9', has: w => !w.error && !!w.needsAnswer && !!w.decision },
+  { key: 'ask', title: 'Потребують відповіді', color: '#E8943A', has: w => !w.error && !!w.needsAnswer && !w.decision },
   { key: 'agent', title: 'Чекають іншого агента', color: '#A98BE0', has: w => !w.error && !w.needsAnswer && !!w.waitsFor },
   // stopped, but what it started in the background (a command, a monitor) is still going: the colour of a wait
   { key: 'task', title: 'Чекають фонову задачу', color: '#A98BE0', has: w => !w.error && !w.needsAnswer && !w.waitsFor && w.kind !== 'work' && !!w.tasks?.length },

@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import type { Room, Worker } from '../types'
-import { compact, detailRows, detailScript, dollars, lasting, mcpName, parseDetail, stateSince, tasksText, waitsText } from './detail'
+import { compact, decisionText, detailRows, detailScript, dollars, lasting, mcpName, parseDetail, stateSince, stateWord, tasksText, waitsText } from './detail'
 
 const NOW = Date.parse('2026-11-12T12:00:00Z')
 const MIN = 60_000
@@ -175,4 +175,25 @@ test('a chat with a task list shows how far it has got, then each step with its 
   expect(rows.slice(at + 1, at + 4).map(r => `${r[0]} ${r[1]}`)).toEqual(['✓ Read the rules', '▶ Write the parser', '○ Test it'])
   // no list, no plan lines
   expect(detailRows(worker(), room, {}, NOW).some(r => r[0] === 'План')).toBe(false)
+})
+
+test('a chat that has put a decision to the person says so in the accordion, with the kind of decision and for how long', () => {
+  const w = worker({ kind: 'work', needsAnswer: true, decision: { kind: 'question', at: NOW - 4 * MIN } })
+  const rows = Object.fromEntries(detailRows(w, room, undefined, NOW))
+  expect(rows['Рішення']).toBe('питання з варіантами · 4 хв')
+  expect(rows['Стан']).toContain('чекає рішення')
+  expect(decisionText({ kind: 'plan' })).toBe('план на схвалення')
+  expect(Object.fromEntries(detailRows(worker({ needsAnswer: true, decision: { kind: 'plan' } }), room, undefined, NOW))['Рішення']).toBe('план на схвалення')
+  // a plain ask (a permission) is not a decision; a failure is what matters when there is one
+  expect(stateWord(worker({ needsAnswer: true }))).toBe('чекає відповіді')
+  expect(Object.fromEntries(detailRows(worker({ needsAnswer: true }), room, undefined, NOW))['Рішення']).toBeUndefined()
+  const bad = worker({ needsAnswer: true, decision: { kind: 'plan' }, error: { code: 'x', text: 't', at: NOW } })
+  expect(Object.fromEntries(detailRows(bad, room, undefined, NOW))['Рішення']).toBeUndefined()
+})
+
+test('the scripts find the transcript of a chat under CLAUDE_CONFIG_DIR first, so that a folder moved to another disk is still read', () => {
+  const script = detailScript('abc')
+  expect(script).toContain('$env:CLAUDE_CONFIG_DIR')
+  expect(script.indexOf('$env:CLAUDE_CONFIG_DIR')).toBeLessThan(script.indexOf('$env:USERPROFILE'))
+  expect(script.includes('"')).toBe(false)
 })

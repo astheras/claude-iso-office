@@ -1,6 +1,6 @@
 import type { PlanStatus, Room, Worker } from '../types'
 import { GROUP_COLOR, groupKeyOf, HOME_MS, WORD } from './data'
-import { mcpName, tasksText, waitsText } from './detail'
+import { decisionText, mcpName, tasksText, waitsText } from './detail'
 import { MAX_ROOMS, SIZE_LIMIT, TRANSITION_MS } from './floor'
 import type { Label, Scene, Spot } from './floor'
 import { esc, hash, n1 } from './iso'
@@ -35,6 +35,7 @@ export const REST_COLOR = '#AEB7C8'
 const AMBER = '#FFC46B'
 const FUTURE = '#8FA3CC'
 const PURPLE = GROUP_COLOR.agent
+const PINK = GROUP_COLOR.decide
 const TINTS = ['#BFD4FF', '#F2B6D3', '#FFD9A0']
 // star colours by temperature, for the backdrop
 const TEMP = ['#BFD4FF', '#DCE8FF', '#FFFFFF', '#FFF3D6', '#FFDDAA', '#FFBE8C']
@@ -254,7 +255,13 @@ const tipOf = (w: Worker, by: string[] = []): string => {
   const tool = w.mcp && key === 'work' ? ` · чекає MCP: ${mcpName(w.mcp)}` : ''
   // for a chat in the list of those that wait for a task, the wait is its state; for any other (it also waits for the
   // person, say) it is a thing said after
-  const state = waits ? `чекає: ${waits}` : key === 'task' ? `чекає фонову задачу: ${tasksText(w)}` : WORD[w.kind]
+  const state = waits
+    ? `чекає: ${waits}`
+    : key === 'task'
+      ? `чекає фонову задачу: ${tasksText(w)}`
+      : key === 'decide' && w.decision
+        ? `чекає рішення: ${decisionText(w.decision)}`
+        : WORD[w.kind]
   const task = w.tasks?.length && key !== 'task' ? ` · чекає фонову задачу: ${tasksText(w)}` : ''
   return `${w.title} — ${state}${w.parentId ? ' (стажер)' : ''}${tool}${task}${named}`
 }
@@ -293,13 +300,14 @@ function star(s: Star, c: Ctx): string {
       pts += `${n1(s.x + d * Math.cos(a))},${n1(s.y + d * Math.sin(a))} `
     }
     g += `<polygon data-k="err" points="${pts.trim()}" fill="${col}" opacity="0.9"/>`
-  } else if (key === 'ask') {
-    // a beacon: a ring that spreads and fades, wider the longer the person has been kept waiting
+  } else if (key === 'ask' || key === 'decide') {
+    // a beacon: a ring that spreads and fades, wider the longer the person has been kept waiting (a decision's is pink, and
+    // the whole system is lit besides: see `spotlight`)
     // in coarse steps: a drawing that changes every few seconds is drawn afresh every time (it blinks)
     const mins = w.askedAt ? Math.max(0, (c.now - w.askedAt) / 60000) : 0
     const max = n1(r + 14 + Math.min(18, Math.floor(mins / 6) * 3))
     g +=
-      `<circle data-k="ask" cx="${x}" cy="${y}" r="${n1(r + 3)}" fill="none" stroke="${col}" stroke-width="1.4">` +
+      `<circle data-k="${key}" cx="${x}" cy="${y}" r="${n1(r + 3)}" fill="none" stroke="${col}" stroke-width="1.4">` +
       pulse('r', `${n1(r + 3)};${max}`, '2.4s', begin) +
       pulse('opacity', '0.9;0', '2.4s', begin) +
       '</circle>'
@@ -368,6 +376,37 @@ function star(s: Star, c: Ctx): string {
     g += `<circle data-k="aim" cx="${x}" cy="${y}" r="${n1(s.reach + 3)}" fill="none" stroke="#FFFFFF" stroke-width="1" stroke-dasharray="3 3" opacity="0.85"/>`
   }
   return `<g data-s="${esc(w.id)}" opacity="${n1(fade)}"><title>${esc(tip)}</title>${g}</g>`
+}
+
+/** How far a lit system reaches: what its star, its planets and the ring of the plan lie within, and a little more. */
+const lightOf = (s: Star): number => n1(Math.max(s.reach + 14, s.r * 5, 36))
+
+/**
+ * The whole system of a star that waits on a decision lit as by a spotlight: a soft pink disc that slowly breathes, held in
+ * a dashed rim. Drawn under every star, so that a lit system never covers one beside it. Seen from afar, it is what says
+ * "a decision is wanted here" before a name can be read.
+ */
+function spotlight(s: Star, begin: number): string {
+  const rr = lightOf(s)
+  const x = n1(s.x)
+  const y = n1(s.y)
+  return (
+    `<g data-k="spot">` +
+    `<circle cx="${x}" cy="${y}" r="${rr}" fill="${PINK}" opacity="0.14">${pulse('opacity', '0.08;0.24;0.08', '3s', begin)}</circle>` +
+    `<circle cx="${x}" cy="${y}" r="${rr}" fill="none" stroke="${PINK}" stroke-width="1" stroke-dasharray="5 4" opacity="0.8"/>` +
+    '</g>'
+  )
+}
+
+/** The badge over a lit system: a pink pill that says what is wanted. Drawn over everything, so that no star covers it. */
+function badge(s: Star): string {
+  const bw = 78
+  const cx = n1(Math.min(W - bw / 2 - 4, Math.max(bw / 2 + 4, s.x)))
+  const cy = n1(Math.max(11, s.y - lightOf(s) - 9))
+  return (
+    `<g data-k="badge"><rect x="${n1(cx - bw / 2)}" y="${n1(cy - 7)}" width="${bw}" height="14" rx="7" fill="${PINK}"/>` +
+    `<text x="${cx}" y="${n1(cy + 3.2)}" text-anchor="middle" font-size="9" font-weight="bold" fill="#3B0F28">чекає рішення</text></g>`
+  )
 }
 
 /**
@@ -536,6 +575,7 @@ function build(rooms: Room[], now: number, cap: number, selectedId: string): Sce
     const sub = [
       room.prNumbers.length ? `PR ${room.prNumbers.join(', ')}` : '',
       room.homeCount ? `згаслих: ${room.homeCount}` : '',
+      picked.some(w => groupKeyOf(w) === 'decide') ? `чекають рішення: ${picked.filter(w => groupKeyOf(w) === 'decide').length}` : '',
       extra > 0 ? `ще: ${extra}` : '',
     ]
       .filter(Boolean)
@@ -558,8 +598,14 @@ function build(rooms: Room[], now: number, cap: number, selectedId: string): Sce
   let rays = ''
   let fg = ''
   let top = ''
+  let lights = ''
+  let badges = ''
   for (const s of stars) {
     rays += tie(s, byId) + waits(s, byId, ctx)
+    if (groupKeyOf(s.w) === 'decide') {
+      lights += spotlight(s, (hash(s.w.id) % 24) / 10)
+      badges += badge(s)
+    }
     // the chosen one is drawn last, so its orbits lie over the stars beside it
     if (s.w.id === selectedId) top = star(s, ctx)
     else fg += star(s, ctx)
@@ -595,8 +641,10 @@ function build(rooms: Room[], now: number, cap: number, selectedId: string): Sce
     backgroundStars(H) +
     bg +
     `<rect width="${W}" height="${H}" fill="url(#vig)"/>` +
+    lights +
     rays +
     fg +
+    badges +
     '</svg>'
   return { svg, width: W, height: H, hiddenRooms: rooms.length - shownRooms.length, shownWorkers, spots, labels }
 }

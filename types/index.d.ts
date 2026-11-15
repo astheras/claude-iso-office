@@ -18,6 +18,12 @@ export type WaitItem = { id: string; title: string; on?: string }
 export type McpWait = { server: string; tool: string; at?: number }
 
 /**
+ * What the agent has put to the person and waits on: a question with options (`AskUserQuestion`), or a plan to approve
+ * (`ExitPlanMode`). `at` is when the call was made (ms). Read from the end of the transcript, a call nothing has answered.
+ */
+export type Decision = { kind: 'question' | 'plan'; at?: number }
+
+/**
  * Work a chat started in the background and has not been told is over: a command run in the background, or a monitor.
  * `what` is its description; `mcp` says the command goes to an MCP server (its text names one); `at` is when it began (ms).
  */
@@ -52,6 +58,8 @@ export type RawSession = {
   plan?: PlanStatus[]
   /** the call to an MCP tool its transcript ends on, not yet answered */
   mcp?: McpWait
+  /** the question or plan its transcript ends on, not yet answered */
+  decision?: Decision
   /** what it started in the background and is still open, read from its transcript */
   tasks?: BgTask[]
   /** how big its output and its cache are, in steps (read from its transcript) */
@@ -83,6 +91,8 @@ export type Worker = {
   parentId?: string
   /** the statuses of its task list, in order; absent when it has none or it is not known */
   plan?: PlanStatus[]
+  /** blocked on the person AND the agent has put a decision to them (a question with options, a plan): its own list */
+  decision?: Decision
   /** it is running, but held up by an MCP tool that has not answered */
   mcp?: McpWait
   /** it has stopped, but what it started in the background is still going: it waits for that */
@@ -139,6 +149,8 @@ export type Sketch = {
   context?: number
   /** the MCP call the transcript ended on at that read, if it had not been answered */
   mcp?: McpWait
+  /** the question or plan the transcript ended on at that read, if it had not been answered */
+  decision?: Decision
   /** the tasks started in the background that are still open, as of the end of what was read */
   tasks?: BgTask[]
 }

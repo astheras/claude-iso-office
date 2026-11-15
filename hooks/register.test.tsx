@@ -67,6 +67,12 @@ let polls = 0
 const runs: string[][] = []
 // whether the system fails to open a claude:// link (the arrow, the «+»)
 let refuseOpen = false
+// the question chat b has put to the person, when it has (what its transcript ends on), and where Claude's folder is said to be
+let asking: 'AskUserQuestion' | 'ExitPlanMode' | undefined
+let configDir: string | undefined
+const listed: string[] = []
+// the engine gives paths with its own separators: compared with forward slashes
+const slashed = (paths: string[]) => [...new Set(paths.map(d => d.split(String.fromCharCode(92)).join('/')))]
 
 // a task list of three steps as the transcript holds it: one made, one move on
 const planCall = (input: unknown, id: string) =>
@@ -86,6 +92,9 @@ const SKETCH = JSON.stringify({
   },
   b: { none: true },
 })
+// chat b's transcript ends on a question to the person that nothing has answered
+const sketchWith = (name: string) =>
+  JSON.stringify({ ...JSON.parse(SKETCH), b: { from: 0, offset: 10, size: 10, plan: [], mcp: { name, at: new Date().toISOString() } } })
 
 const DISK = JSON.stringify({
   plan: PLAN_LINES,
@@ -127,10 +136,14 @@ const engine = ($: any, on: any) => {
   on('clock.after', () => ({ value: { id: 'after' } }))
   on('ui.status', () => ({ value: undefined }))
   on('env.get', (_: unknown, e: any) => ({
-    value: e.name === 'CLAUDE_CODE_HOST_SESSION_ID' ? OWN.sessionId : e.name === 'USERPROFILE' ? 'C:/Users/x' : undefined,
+    value:
+      e.name === 'CLAUDE_CODE_HOST_SESSION_ID' ? OWN.sessionId : e.name === 'USERPROFILE' ? 'C:/Users/x' : e.name === 'CLAUDE_CONFIG_DIR' ? configDir : undefined,
   }))
   // the registry of running chats: session b is blocked on the person
-  on('fs.list', () => ({ value: [{ name: '1.json', kind: 'file' }, { name: '1.key', kind: 'file' }] }))
+  on('fs.list', (_: unknown, e: any) => {
+    listed.push(String(e.path))
+    return { value: [{ name: '1.json', kind: 'file' }, { name: '1.key', kind: 'file' }] }
+  })
   on('fs.read', () => ({ value: JSON.stringify({ status: 'waiting', hostSessionId: 'b', statusUpdatedAt: Date.now() - 7 * 60000 }) }))
   // like the app: list_sessions leaves out the session that asks; get_session answers for it
   on('mcp.call', (_: unknown, e: any) => {
@@ -148,7 +161,7 @@ const engine = ($: any, on: any) => {
     runs.push([...e.argv])
     // the two scripts it is given: the transcript error read, and the chat details read
     const script = String(e.argv[4])
-    const stdout = e.argv[0] !== 'powershell' ? '' : script.includes('isApiErrorMessage') ? ERRORS : script.includes('$items') ? SKETCH : DISK
+    const stdout = e.argv[0] !== 'powershell' ? '' : script.includes('isApiErrorMessage') ? ERRORS : script.includes('$items') ? (asking ? sketchWith(asking) : SKETCH) : DISK
     return { value: { exitCode: refuseOpen && e.argv[0] === 'cmd' ? 1 : 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
 }
@@ -561,4 +574,57 @@ test('a star shows its name in a card of the pane while the pointer is on it', a
   expect(cards[0].props.source).toContain('>Chat A — працює · чекають на</text>')
   expect(await cardOf('Chat D — чекає: Unity (Chat A)')).toHaveLength(1)
   await ui.unmount()
+})
+
+test('a chat blocked on the person that has put a question to them is in a list of its own, and lit in the galaxies', async ($, on) => {
+  asking = 'AskUserQuestion'
+  try {
+    await startedFresh($, on)
+    await new Promise(r => (globalThis as any).setTimeout(r, 500))
+    const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+    await new Promise(r => (globalThis as any).setTimeout(r, 300))
+    expect(await ui.find({ type: 'Text', text: /^Чекають рішення · 1$/ })).toBeDefined()
+    // it is no longer among the plain asks
+    expect(await ui.find({ type: 'Text', text: /^Потребують відповіді/ })).toBeUndefined()
+    expect(await ui.find({ type: 'Text', text: /^чекає рішення: питання з варіантами$/ })).toBeDefined()
+    const scene: any = await ui.find({ type: 'Svg' })
+    expect(scene.props.source).toContain('data-k="spot"')
+    expect(scene.props.source).toContain('data-k="badge"')
+    await ui.unmount()
+  } finally {
+    asking = undefined
+  }
+})
+
+test('without a question put to the person, a chat that waits on them is a plain ask and nothing is lit', async ($, on) => {
+  await startedFresh($, on)
+  await new Promise(r => (globalThis as any).setTimeout(r, 500))
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  await new Promise(r => (globalThis as any).setTimeout(r, 300))
+  expect(await ui.find({ type: 'Text', text: /^Потребують відповіді · 1$/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^Чекають рішення/ })).toBeUndefined()
+  const scene: any = await ui.find({ type: 'Svg' })
+  expect(scene.props.source).not.toContain('data-k="spot"')
+  await ui.unmount()
+})
+
+test('the registry of running chats is read from where CLAUDE_CONFIG_DIR says, else from the home folder', async ($, on) => {
+  configDir = 'D:/Claude/.claude'
+  listed.length = 0
+  try {
+    await startedFresh($, on)
+    await new Promise(r => (globalThis as any).setTimeout(r, 300))
+    expect(listed.length).toBeGreaterThan(0)
+    expect(slashed(listed)).toEqual(['D:/Claude/.claude/sessions'])
+  } finally {
+    configDir = undefined
+  }
+})
+
+test('with no CLAUDE_CONFIG_DIR the registry is in the .claude of the home folder', async ($, on) => {
+  listed.length = 0
+  await startedFresh($, on)
+  await new Promise(r => (globalThis as any).setTimeout(r, 300))
+  expect(listed.length).toBeGreaterThan(0)
+  expect(slashed(listed)).toEqual(['C:/Users/x/.claude/sessions'])
 })

@@ -4,10 +4,11 @@ import type { EngineInterface, Register, Timer } from 'claude-code'
 import type { Detail, DetailState, ErrorCache, Memory, Office, RawSession, Room, SketchCache, View, Worker } from '../types'
 import { ack, ago, agoText, classify, emptyMemory, GROUP_COLOR, groupSessions, parseSessions, RED, summary, WORD } from './data'
 import type { Group } from './data'
-import { detailRows, detailScript, mcpName, parseDetail, tasksText, waitsText } from './detail'
+import { decisionText, detailRows, detailScript, mcpName, parseDetail, tasksText, waitsText } from './detail'
 import { errorLabel, errorOf, errorsScript, needsCheck, nextCache, parseErrors, parsePeers, peerOf, waitOf } from './errors'
 import { floorSvg } from './floor'
 import { galaxySvg, REST_COLOR, steady } from './galaxy'
+import { claudeDir } from './paths'
 import { planProgress } from './plan'
 import { needsSketch, nextSketches, parseSketches, sketchLook, sketchScript, withSketches } from './sketch'
 import type { Label, Spot } from './floor'
@@ -115,9 +116,12 @@ async function ownSession($: EngineInterface, id: string | undefined): Promise<R
 async function waitingSessions($: EngineInterface): Promise<Map<string, number>> {
   const ids = new Map<string, number>()
   try {
+    // Claude's folder may have been moved to another disk: CLAUDE_CONFIG_DIR says where, else the home folder has it
+    const configDir = await $.env.get('CLAUDE_CONFIG_DIR')
     const home = (await $.env.get('USERPROFILE')) || (await $.env.get('HOME'))
-    if (!home) return ids
-    const dir = `${home.replace(/\\/g, '/')}/.claude/sessions`
+    const base = claudeDir({ configDir: configDir || undefined, home: home || undefined })
+    if (!base) return ids
+    const dir = `${base}/sessions`
     const files = (await $.fs.list(dir)).filter(f => /^\d+\.json$/.test(f.name))
     await Promise.all(
       files.map(async f => {
@@ -307,7 +311,7 @@ function pollSoon($: EngineInterface) {
 const open = ($: EngineInterface) => $.ui.open({ id: PANE, title: TITLE })
 
 const MARK = { work: '▶', wait: '!', rest: '·', home: '' } as const
-const GROUP_MARK = { err: '✕', ask: '?', agent: '…', task: '…', work: '▶', done: '!', rest: '·' } as const
+const GROUP_MARK = { err: '✕', decide: '◆', ask: '?', agent: '…', task: '…', work: '▶', done: '!', rest: '·' } as const
 // icons as plain glyphs, where there is no drawing to hold their tooltips
 const GLYPH: Record<IconKind, string> = { open: '↗', seen: '✓', add: '+' }
 
@@ -600,6 +604,11 @@ export const register: Register = on => {
             {openIcon(w)}
             {g.key === 'done' && seenIcon(w)}
           </Box>
+          {w.decision && !w.error && (
+            <Box paddingLeft={2}>
+              <Text color={g.color}>{`чекає рішення: ${decisionText(w.decision)}`}</Text>
+            </Box>
+          )}
           {waitsText(w) && !w.error && !w.needsAnswer && (
             <Box paddingLeft={2}>
               <Text color={g.color}>{`чекає: ${waitsText(w)}`}</Text>

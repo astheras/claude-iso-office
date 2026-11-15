@@ -522,3 +522,60 @@ test('a session started by another is tied to it by a thread, in one galaxy or a
   expect(count(galaxySvg([room('r', [w('a'), w('b')])], NOW).svg, /data-k="tie"/g)).toBe(0)
   expect(count(galaxySvg([room('r', [w('k', 'work', { parentId: 'gone' })])], NOW).svg, /data-k="tie"/g)).toBe(0)
 })
+
+test('a system that waits on a decision is lit as a whole: a pink disc under the stars, a badge over them, a beacon of the same colour', () => {
+  const ws = [
+    w('d', 'work', { needsAnswer: true, askedAt: NOW - 60_000, decision: { kind: 'question' }, plan: [D, N, F] }),
+    w('q', 'work', { needsAnswer: true }),
+    w('k', 'work'),
+  ]
+  const { svg } = galaxySvg([room('r', ws)], NOW)
+  // exactly one system is lit: the one with the decision, not the plain ask beside it
+  expect(count(svg, /data-k="spot"/g)).toBe(1)
+  expect(count(svg, /data-k="badge"/g)).toBe(1)
+  expect(svg).toContain('чекає рішення</text>')
+  expect(svg).toContain(`fill="${GROUP_COLOR.decide}" opacity="0.14"`)
+  // the disc lies under every star and the badge over them
+  expect(svg.indexOf('data-k="spot"')).toBeLessThan(svg.indexOf('<g data-s='))
+  expect(svg.indexOf('data-k="badge"')).toBeGreaterThan(svg.lastIndexOf('<g data-s='))
+  // the star has the beacon, in the colour of its own list, which is not the orange of a plain ask
+  expect(star(svg, 'd')).toContain('data-k="decide"')
+  expect(star(svg, 'd')).toContain(`stroke="${GROUP_COLOR.decide}"`)
+  expect(star(svg, 'q')).toContain('data-k="ask"')
+  expect(GROUP_COLOR.decide).not.toBe(GROUP_COLOR.ask)
+  // the breathing is an animation of the disc
+  expect(svg.slice(svg.indexOf('data-k="spot"'), svg.indexOf('data-k="badge"'))).toContain('values="0.08;0.24;0.08"')
+})
+
+test('what the decision is, is in the card of the star and in the line under the name of the galaxy', () => {
+  const out = galaxySvg(
+    [
+      room('r', [
+        w('d', 'work', { title: 'Схема', needsAnswer: true, decision: { kind: 'plan' } }),
+        w('e', 'work', { title: 'Питання', needsAnswer: true, decision: { kind: 'question' } }),
+      ]),
+    ],
+    NOW,
+  )
+  expect(out.spots.find(x => x.id === 'd')!.tip).toContain('чекає рішення: план на схвалення')
+  expect(out.spots.find(x => x.id === 'e')!.tip).toContain('чекає рішення: питання з варіантами')
+  expect(out.labels[0]!.sub).toContain('чекають рішення: 2')
+  // nobody waits on a decision: nothing is lit and nothing is said
+  const calm = galaxySvg([room('r', [w('a', 'work', { needsAnswer: true }), w('b', 'rest')])], NOW)
+  expect(calm.svg).not.toContain('data-k="spot"')
+  expect(calm.svg).not.toContain('data-k="badge"')
+  expect(calm.labels[0]!.sub).not.toContain('рішення')
+})
+
+test('a badge near the edge of the sky is kept on it', () => {
+  // many galaxies, so that a lit star may stand close to a rim
+  const rooms = Array.from({ length: 4 }, (_, r) => room(`g${r}`, [w(`s${r}`, 'work', { needsAnswer: true, decision: { kind: 'plan' } })]))
+  const { svg, width } = galaxySvg(rooms, NOW)
+  const xs = [...svg.matchAll(/data-k="badge"><rect x="(-?[\d.]+)" y="(-?[\d.]+)" width="(\d+)"/g)]
+  expect(xs.length).toBe(4)
+  for (const m of xs) {
+    expect(Number(m[1])).toBeGreaterThanOrEqual(0)
+    expect(Number(m[1]) + Number(m[3])).toBeLessThanOrEqual(width)
+    expect(Number(m[2])).toBeGreaterThanOrEqual(0)
+  }
+})

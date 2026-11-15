@@ -1,5 +1,6 @@
 import type { ErrorCache, PeerAsk, RawSession, SessionError, WaitItem } from '../types'
 import { HOME_MS } from './data'
+import { CLAUDE_DIR_PS, transcriptGlobPs } from './paths'
 
 /** How many chats one run looks at, and how much of the end of each transcript it reads (the last record is all it needs). */
 export const MAX_CHECKED = 30
@@ -119,6 +120,7 @@ export function errorsScript(sessionIds: string[]): string {
     '$q = [char]34',
     `$ids = @(${list || "''"})`,
     '$res = @{}',
+    CLAUDE_DIR_PS,
     'function Field($line, $pattern) { $r = [regex]::Match($line, $pattern); if ($r.Success) { $r.Groups[1].Value } }',
     "$typePat = $q + 'type' + $q + ':' + $q + 'assistant' + $q",
     "$sidePat = $q + 'isSidechain' + $q + ':true'",
@@ -136,7 +138,7 @@ export function errorsScript(sessionIds: string[]): string {
     '  if (-not $m) { continue }',
     "  $cli = Field ([IO.File]::ReadAllText($m.FullName)) ($q + 'cliSessionId' + $q + ':' + $q + '([^' + $q + ']+)')",
     '  if (-not $cli) { continue }',
-    "  $t = Get-ChildItem -Path ($env:USERPROFILE + '\\.claude\\projects\\*\\' + $cli + '.jsonl') -File | Select-Object -First 1",
+    `  $t = Get-ChildItem -Path ${transcriptGlobPs('$cli')} -File | Select-Object -First 1`,
     '  if (-not $t) { continue }',
     "  $fs = [IO.File]::Open($t.FullName, 'Open', 'Read', 'ReadWrite')",
     '  try {',

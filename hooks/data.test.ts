@@ -253,3 +253,28 @@ test('a project room knows its folder, so that a new session can be started in i
   expect(byType.cowork).toBeUndefined()
   expect(byType.remote).toBeUndefined()
 })
+
+test('a chat that waits on the person and has put a decision to them has a list of its own, ahead of the plain asks', () => {
+  const decision = { kind: 'question' as const, at: NOW - 60_000 }
+  const out = classify(
+    [
+      s('ask', { needsAnswer: true }),
+      s('pick', { needsAnswer: true, isRunning: true, decision }),
+      s('plan', { needsAnswer: true, decision: { kind: 'plan' } }),
+      // a decision the registry does not confirm (the chat is not blocked on the person) is no decision
+      s('stale', { isRunning: true, decision }),
+      s('bad', { needsAnswer: true, decision, error: FAIL }),
+    ],
+    emptyMemory(),
+    NOW,
+  )
+  const groups = groupSessions(out.rooms)
+  expect(groups.map(g => g.key)).toEqual(['err', 'decide', 'ask', 'work'])
+  expect(groups[1]!.title).toBe('Чекають рішення')
+  expect(groups[1]!.items.map(x => x.w.id).sort()).toEqual(['pick', 'plan'])
+  expect(groups[2]!.items.map(x => x.w.id)).toEqual(['ask'])
+  expect(groups[3]!.items.map(x => x.w.id)).toEqual(['stale'])
+  // a colour of its own: not the orange of a permission
+  expect(groups[1]!.color).not.toBe(groups[2]!.color)
+  expect(out.rooms[0]!.workers.find(w => w.id === 'stale')!.decision).toBeUndefined()
+})

@@ -1,6 +1,7 @@
-import type { BgTask, Detail, McpWait, Room, Worker } from '../types'
+import type { BgTask, Decision, Detail, McpWait, Room, Worker } from '../types'
 import { agoText, WORD } from './data'
 import { errorLabel } from './errors'
+import { CLAUDE_DIR_PS, transcriptGlobPs } from './paths'
 import { PLAN_MARK, planCount, planFrom } from './plan'
 
 /** How long, to the minute; seconds only when short. */
@@ -57,13 +58,14 @@ export function detailScript(sessionId: string): string {
     `$id = '${sessionId}'`,
     '$q = [char]34',
     '$res = @{ meta = $null; cost = $null; plan = $null }',
+    CLAUDE_DIR_PS,
     "$mp = $env:LOCALAPPDATA + '\\Claude-Data\\*\\claude-code-sessions\\*\\*\\' + $id + '.json'",
     '$m = Get-ChildItem -Path $mp -File | Select-Object -First 1',
     'if ($m) {',
     '  $raw = [IO.File]::ReadAllText($m.FullName)',
     "  function Pick($name) { $r = [regex]::Match($raw, $q + $name + $q + ':' + $q + '?([^,' + $q + '}]*)'); if ($r.Success) { $r.Groups[1].Value } }",
     "  $res.meta = @{ cliSessionId = (Pick 'cliSessionId'); model = (Pick 'model'); effort = (Pick 'effort'); permissionMode = (Pick 'permissionMode'); createdAt = (Pick 'createdAt'); lastTurnEdgeAt = (Pick 'lastTurnEdgeAt'); completedTurns = (Pick 'completedTurns') }",
-    "  $tp = $env:USERPROFILE + '\\.claude\\projects\\*\\' + $res.meta.cliSessionId + '.jsonl'",
+    `  $tp = ${transcriptGlobPs('$res.meta.cliSessionId')}`,
     '  $t = Get-ChildItem -Path $tp -File | Select-Object -First 1',
     '  if ($t) {',
     "    $pat = '{' + $q + 'type' + $q + ':' + $q + 'cost-state' + $q",
@@ -147,6 +149,7 @@ export function detailRows(w: Worker, room: Room, d: Detail | undefined, now: nu
     if (value) rows.push(tone ? [label, value, tone] : [label, value])
   }
   add('Стан', `${stateWord(w)} · ${lasting(now - stateSince(w, d))}`, w.error ? 'bad' : undefined)
+  if (w.decision && !w.error) add('Рішення', `${decisionText(w.decision)}${w.decision.at ? ` · ${lasting(now - w.decision.at)}` : ''}`)
   if (w.waitsFor?.length) add('Чекає', w.waitsFor.map(waitText).join('; '))
   // a call to an MCP tool that has not answered: which server and which tool, and for how long (a question to the person is not this)
   if (w.mcp && !w.needsAnswer) add('Чекає MCP', `${mcpName(w.mcp)}${w.mcp.at ? ` · ${lasting(now - w.mcp.at)}` : ''}`)
@@ -199,12 +202,17 @@ export const stateWord = (w: Worker): string =>
   w.error
     ? 'помилка'
     : w.needsAnswer
-      ? 'чекає відповіді'
+      ? w.decision
+        ? 'чекає рішення'
+        : 'чекає відповіді'
       : w.waitsFor
         ? 'чекає іншого агента'
         : w.tasks?.length
           ? 'чекає фонову задачу'
           : WORD[w.kind]
+
+/** What the agent has put to the person: «питання з варіантами» or «план на схвалення». */
+export const decisionText = (x: Decision): string => (x.kind === 'plan' ? 'план на схвалення' : 'питання з варіантами')
 
 /** One thing a chat waits for: «Unity (Їжа для комплексів)», or just the chat's title. */
 export const waitText = (x: { title: string; on?: string }): string => (x.on ? `${x.on} (${x.title})` : x.title)
