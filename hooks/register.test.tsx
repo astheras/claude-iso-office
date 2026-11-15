@@ -376,6 +376,48 @@ test('/office theme switches between the office and the galaxies, and says which
   await ui.unmount()
 })
 
+test('the «Легенда» tab explains every state, follows the theme, and the first tab brings the picture back', async ($, on) => {
+  await started($, on)
+  await new Promise(r => (globalThis as any).setTimeout(r, 300))
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+
+  // the picture is the first tab
+  expect(await ui.find({ type: 'Button', text: /^Огляд$/ })).toBeDefined()
+  expect(await ui.find({ type: 'Svg' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^Позначки$/ })).toBeUndefined()
+
+  await ui.press({ key: 'tab-legend' })
+  await new Promise(r => (globalThis as any).setTimeout(r, 200))
+  // no picture, no lists: the states, each by its title
+  expect(await ui.find({ type: 'Svg' })).toBeUndefined()
+  for (const title of ['З помилкою', 'Чекають рішення', 'Потребують відповіді', 'Чекають іншого агента', 'Чекають фонову задачу', 'У роботі', 'Завершені, чекають', 'Простоюють', 'Вдома']) {
+    expect(await ui.find({ type: 'Text', text: title })).toBeDefined()
+  }
+  expect(await ui.find({ type: 'Text', text: /^Позначки$/ })).toBeDefined()
+  // the office is the theme: desks, not stars
+  expect(await ui.find({ type: 'Text', text: /бульбашка з трьома крапками/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /Червона зірка/ })).toBeUndefined()
+
+  await $.command.run({ command: 'office', args: 'theme galaxy' })
+  await new Promise(r => (globalThis as any).setTimeout(r, 200))
+  expect(await ui.find({ type: 'Text', text: /Червона зірка/ })).toBeDefined()
+
+  await ui.press({ key: 'tab-main' })
+  await new Promise(r => (globalThis as any).setTimeout(r, 200))
+  expect(await ui.find({ type: 'Svg' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^Позначки$/ })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('/office legend opens the pane on the legend, and the terminal gets it in words too', async ($, on) => {
+  await started($, on)
+  expect((await $.command.run({ command: 'office', args: 'legend' })).text).toBe('Legend tab opened.')
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await ui.find({ type: 'Text', text: 'Чекають рішення' })).toBeDefined()
+  expect(await ui.find({ type: 'Button', text: /Chat A/ })).toBeUndefined()
+  await ui.unmount()
+})
+
 test('in the galaxies a star is pressed like a worker, and a project name like a room', async ($, on) => {
   await started($, on)
   await new Promise(r => (globalThis as any).setTimeout(r, 300))

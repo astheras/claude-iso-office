@@ -16,6 +16,8 @@ An isometric mini-office for the Claude Code desktop app. Every project folder i
 
 The pane fills the width of the panel and grows when you widen it. Hover over a worker for a tooltip.
 
+**Two tabs** sit at the top of the pane: **Огляд** ("Overview": the picture and its lists) and **Легенда** ("Legend"). The legend lists every state (with an error, waits for a decision, needs an answer, waits for another agent, waits for a background task, in progress, finished, idle, gone home), each in its own colour and glyph, with what it means and how it is drawn in the theme you are in, then the marks that are not states (the PR ring, the size of the system, the planets and so on). Its titles and colours are read from the lists themselves, so they cannot drift apart. `/office legend` opens the pane on that tab.
+
 ## The galaxies theme
 
 The galaxies are the default picture. `/office theme` switches to the isometric office (and back). The list under it, the accordion and the clicks work the same.
@@ -51,6 +53,7 @@ In the desktop app, where `/plugin` does not run: click **+** next to the prompt
 | --- | --- |
 | `/office` | opens the Office pane |
 | `/office mute`, `/office unmute` | turns the "session finished" toasts off and on |
+| `/office legend` | opens the pane on the Legend tab, which explains every state |
 | `/office theme [office\|galaxy]` | switches the picture between the office and the galaxies (no argument: the other one) |
 | `/office seen` | marks everyone who is waiting as seen |
 | `/office debug` | shows the click areas as blocks (use it if clicks land beside the workers) |

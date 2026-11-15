@@ -2,12 +2,13 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, Timer } from 'claude-code'
 
 import type { Detail, DetailState, ErrorCache, Memory, Office, RawSession, Room, SketchCache, View, Worker } from '../types'
-import { ack, ago, agoText, classify, emptyMemory, GROUP_COLOR, groupSessions, parseSessions, RED, summary, WORD } from './data'
+import { ack, ago, agoText, classify, emptyMemory, GROUP_COLOR, GROUP_MARK, groupSessions, parseSessions, RED, summary, WORD } from './data'
 import type { Group } from './data'
 import { decisionText, detailRows, detailScript, mcpName, parseDetail, tasksText, waitsText } from './detail'
 import { errorLabel, errorOf, errorsScript, needsCheck, nextCache, parseErrors, parsePeers, peerOf, waitOf } from './errors'
 import { floorSvg } from './floor'
 import { galaxySvg, REST_COLOR, steady } from './galaxy'
+import { legend } from './legend'
 import { claudeDir } from './paths'
 import { planProgress } from './plan'
 import { needsSketch, nextSketches, parseSketches, sketchLook, sketchScript, withSketches } from './sketch'
@@ -311,7 +312,6 @@ function pollSoon($: EngineInterface) {
 const open = ($: EngineInterface) => $.ui.open({ id: PANE, title: TITLE })
 
 const MARK = { work: '▶', wait: '!', rest: '·', home: '' } as const
-const GROUP_MARK = { err: '✕', decide: '◆', ask: '?', agent: '…', task: '…', work: '▶', done: '!', rest: '·' } as const
 // icons as plain glyphs, where there is no drawing to hold their tooltips
 const GLYPH: Record<IconKind, string> = { open: '↗', seen: '✓', add: '+' }
 
@@ -398,6 +398,8 @@ async function pick($: EngineInterface, id: string) {
 
 const goRoom = ($: EngineInterface, key: string) => update($, view, v => ({ ...v, room: key, note: '' }))
 
+const goTab = ($: EngineInterface, tab: NonNullable<View['tab']>) => update($, view, v => ({ ...v, tab, note: '' }))
+
 /**
  * The link that opens a new session in a folder: the app's own `claude://code/new?folder=…`, the one its «New Claude Code
  * Session» menu entry uses. The folder goes as the session gives it (backslashes and all): the app asks whether to trust
@@ -445,7 +447,7 @@ const waiting = (rooms: Room[]) => rooms.flatMap(r => r.workers.filter(w => w.ki
 
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
-    await $.command.register({ name: 'office', description: 'Office pane: /office [mute|unmute|seen|theme [office|galaxy]]' })
+    await $.command.register({ name: 'office', description: 'Office pane: /office [mute|unmute|seen|legend|theme [office|galaxy]]' })
     void open($)
     lastRenderPollAt = 0
     void poll($)
@@ -482,6 +484,11 @@ export const register: Register = on => {
       const next = asked === 'office' || asked === 'galaxy' ? asked : now === 'galaxy' ? 'office' : 'galaxy'
       await update($, view, v => ({ ...v, theme: next }))
       return { text: next === 'galaxy' ? 'Theme: galaxies.' : 'Theme: office.' }
+    }
+    if (arg === 'legend') {
+      await goTab($, 'legend')
+      await open($)
+      return { text: 'Legend tab opened.' }
     }
     if (arg === 'seen') {
       const ids = waiting((await read($, office)).rooms).map(w => w.id)
@@ -708,8 +715,55 @@ export const register: Register = on => {
       )
     }
 
+    // the tabs: the picture with its lists, and the legend that explains every state
+    const tab = v.tab === 'legend' ? 'legend' : 'main'
+    const tabs = (
+      <Box flexDirection="row" gap={1}>
+        <Button key="tab-main" variant={tab === 'main' ? 'primary' : 'secondary'} onPress={() => void goTab($, 'main')}>
+          Огляд
+        </Button>
+        <Button key="tab-legend" variant={tab === 'legend' ? 'primary' : 'secondary'} onPress={() => void goTab($, 'legend')}>
+          Легенда
+        </Button>
+      </Box>
+    )
+
+    if (tab === 'legend') {
+      const L = legend(isGalaxy ? 'galaxy' : 'office')
+      return (
+        <Box flexDirection="column" gap={1}>
+          {tabs}
+          <Text dimColor>{`Стани сесій і як їх видно ${isGalaxy ? 'в галактиках' : 'в офісі'}. /office theme перемикає вигляд.`}</Text>
+          {L.states.map(s => (
+            <Box flexDirection="row" gap={1}>
+              <Box width={2}>
+                <Text color={s.color}>{s.mark}</Text>
+              </Box>
+              <Box flexDirection="column">
+                <Text bold color={s.color}>
+                  {s.title}
+                </Text>
+                <Text>{s.means}</Text>
+                <Text dimColor>{s.looks}</Text>
+              </Box>
+            </Box>
+          ))}
+          <Text bold>Позначки</Text>
+          {L.marks.map(mk => (
+            <Box flexDirection="column">
+              <Text>{mk.name}</Text>
+              <Box paddingLeft={2}>
+                <Text dimColor>{mk.text}</Text>
+              </Box>
+            </Box>
+          ))}
+        </Box>
+      )
+    }
+
     return (
       <Box flexDirection="column" gap={1}>
+        {tabs}
         <Box flexDirection="row" gap={2}>
           <Text dimColor>
             {summary(shown)}

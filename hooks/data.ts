@@ -168,6 +168,11 @@ export const groupKeyOf = (w: Worker): GroupKey | undefined => GROUP_DEFS.find(d
 
 export const GROUP_COLOR = Object.fromEntries(GROUP_DEFS.map(d => [d.key, d.color])) as Record<GroupKey, string>
 
+export const GROUP_TITLE = Object.fromEntries(GROUP_DEFS.map(d => [d.key, d.title])) as Record<GroupKey, string>
+
+/** The glyph in front of a chat in its list (and in the legend): the colour says the state, this says it without colour. */
+export const GROUP_MARK = { err: '✕', decide: '◆', ask: '?', agent: '…', task: '…', work: '▶', done: '!', rest: '·' } as const
+
 /** The sessions of the given rooms in the three lists the pane shows, in that order; a list with nobody in it is left out. */
 export function groupSessions(rooms: Room[]): Group[] {
   const all = rooms.flatMap(room => room.workers.map(w => ({ w, room })))

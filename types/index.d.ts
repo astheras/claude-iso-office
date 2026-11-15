@@ -208,6 +208,8 @@ export type View = {
   debug: boolean
   /** how the work is drawn: the isometric office (the default) or the galaxies */
   theme?: 'office' | 'galaxy'
+  /** the pane's tab: the picture with its lists (the default), or the legend that explains every state */
+  tab?: 'main' | 'legend'
 }
 
 export type Office = {
