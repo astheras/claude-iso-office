@@ -322,6 +322,19 @@ test('the question is read from the answer of the script, carried to the chat, a
   expect(kept.a!.v).toBe(SKETCH_VERSION)
 })
 
+test('without a question in the chat file, the script takes it from the wrap-up call the transcript ends on, unless the person has spoken since', () => {
+  const script = sketchScript([{ id: 'a', offset: 0 }])
+  // the pattern for the `ask` of the call, and for a prompt of the person (a record of type user that answers no call)
+  expect(script).toContain(String.raw`'ask' + $q + ':' + $q + '((?:[^' + $q + '\\]|\\.)*)'`)
+  expect(script).toContain(`$pu = $q + 'type' + $q + ':' + $q + 'user' + $q`)
+  // only when the file gave none, and read from the end back: a prompt stops the search, a call with no `ask` ends it with none
+  expect(script).toContain('if (-not $ask) {')
+  expect(script).toContain('elseif ($l.Contains($pu) -and -not $l.Contains($p8)) { break }')
+  // a cache made before this fallback is read once more, or a chat read to its end would keep showing no question
+  expect(SKETCH_VERSION).toBeGreaterThanOrEqual(3)
+  expect(script.includes('"')).toBe(false)
+})
+
 test('the script reads the question and the end of the turn from the file of the chat itself', () => {
   const script = sketchScript([{ id: 'a', offset: 0 }])
   expect(script).toContain('needsUser')

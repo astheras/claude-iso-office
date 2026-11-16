@@ -16,7 +16,7 @@ export const CHUNK_BYTES = 8 * 1024 * 1024
 /** A chat that is running moves all the time: it is read again at most this often. */
 export const RUNNING_EVERY_MS = 20000
 /** What the reader knows: a cache made by an older one is read once more, for it lacks what has been added since. */
-export const SKETCH_VERSION = 2
+export const SKETCH_VERSION = 3
 
 /** Steps of a chat's output tokens: the size of its star. */
 export const sizeStep = (out: number): number => (out < 1e3 ? 0 : out < 1e4 ? 1 : out < 1e5 ? 2 : out < 5e5 ? 3 : 4)
@@ -74,6 +74,10 @@ export function sketchScript(items: { id: string; offset: number }[]): string {
     // The pattern is: "needsUser":"(any run of non-quote non-backslash characters, or a backslash and the one after it)"
     "$pn = $q + 'needsUser' + $q + ':' + $q + '((?:[^' + $q + '\\\\]|\\\\.)*)' + $q",
     "$pe = $q + 'lastTurnEdgeAt' + $q + ':([0-9]+)'",
+    // when the chat's file keeps no question (a chat started from another may not), the transcript has it: the `ask` of the
+    // wrap-up call the turn ended on, as JSON text; a prompt of the person after that call means the turn has gone on
+    "$pu = $q + 'type' + $q + ':' + $q + 'user' + $q",
+    "$pk = $q + 'ask' + $q + ':' + $q + '((?:[^' + $q + '\\\\]|\\\\.)*)' + $q",
     // work started in the background: the calls that start (or stop) it, the answers that name it, the notices that end it
     "$pb1 = $q + 'run_in_background' + $q + ':true'",
     "$pb2 = $q + 'name' + $q + ':' + $q + 'Monitor' + $q",
@@ -157,6 +161,26 @@ export function sketchScript(items: { id: string; offset: number }[]): string {
     '              if (-not $any -and -not $l.Contains($p11)) { break }',
     '              $ns++',
     '              if ($ns -ge 4) { break }',
+    '            }',
+    '          }',
+    // From the end back again: the last wrap-up call, if no prompt of the person follows it (answers to calls and the
+    // chat's own closing words do not count), is the question the turn ended on.
+    '          if (-not $ask) {',
+    '            for ($i = $tl.Length - 1; $i -ge $lo; $i--) {',
+    '              $l = $tl[$i]',
+    '              if (-not $l.Contains($p5)) { continue }',
+    '              if ($l.Contains($p9)) {',
+    '                $w = $l.IndexOf($p2)',
+    '                if ($w -ge 0) {',
+    '                  $wm = [regex]::Match($l.Substring($w), $pk)',
+    '                  if ($wm.Success -and $wm.Groups[1].Value.Trim().Length -gt 0) {',
+    '                    $ask = $wm.Groups[1].Value',
+    '                    $wt = [regex]::Match($l, $p12)',
+    '                    if (-not $edge -and $wt.Success) { $edge = [string][DateTimeOffset]::Parse($wt.Groups[1].Value, [Globalization.CultureInfo]::InvariantCulture).ToUnixTimeMilliseconds() }',
+    '                  }',
+    '                  break',
+    '                }',
+    '              } elseif ($l.Contains($pu) -and -not $l.Contains($p8)) { break }',
     '            }',
     '          }',
     '        }',
