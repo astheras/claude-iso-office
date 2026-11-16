@@ -1,6 +1,6 @@
 import type { PlanStatus, Room, Worker } from '../types'
 import { GROUP_COLOR, groupKeyOf, HOME_MS, WORD } from './data'
-import { decisionText, mcpName, tasksText, waitsText } from './detail'
+import { askText, decisionText, mcpName, tasksText, waitsText } from './detail'
 import { MAX_ROOMS, SIZE_LIMIT, TRANSITION_MS } from './floor'
 import { planProgress } from './plan'
 import type { Label, Scene, Spot } from './floor'
@@ -262,9 +262,11 @@ const tipOf = (w: Worker, by: string[] = []): string => {
       ? `чекає фонову задачу: ${tasksText(w)}`
       : key === 'decide' && w.decision
         ? `чекає рішення: ${decisionText(w.decision)}`
-        : key === 'plan' && w.plan
-          ? `план не завершено: ${planProgress(w.plan)}`
-          : WORD[w.kind]
+        : key === 'turn' && w.turnAsk
+          ? `потребує рішення: ${askText(w.turnAsk)}`
+          : key === 'plan' && w.plan
+            ? `план не завершено: ${planProgress(w.plan)}`
+            : WORD[w.kind]
   const task = w.tasks?.length && key !== 'task' ? ` · чекає фонову задачу: ${tasksText(w)}` : ''
   return `${w.title} — ${state}${w.parentId ? ' (стажер)' : ''}${tool}${task}${named}`
 }

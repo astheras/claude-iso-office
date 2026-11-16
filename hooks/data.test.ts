@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { ack, classify, emptyMemory, groupSessions, HOME_MS, parseSessions, roomOf, summary, WAIT_MS } from './data'
+import { ack, classify, emptyMemory, GROUP_COLOR, groupKeyOf, groupSessions, HOME_MS, parseSessions, roomOf, summary, WAIT_MS } from './data'
 import { MAX_TASK_MS } from './tasks'
 import type { RawSession } from '../types'
 
@@ -308,4 +308,47 @@ test('a chat that has just finished with its plan undone is in the plan list, no
   const second = classify([s('a', { plan: ['pending'] })], first.memory, NOW + 5000)
   expect(second.rooms[0]!.workers[0]!.kind).toBe('wait')
   expect(groupSessions(second.rooms).map(g => g.key)).toEqual(['plan'])
+})
+
+test('a chat that stopped on a question to the person has a list of its own, behind the plain asks and ahead of every wait', () => {
+  const turnAsk = { text: 'Що робимо з залишками КП?', at: NOW - 60_000 }
+  const half = ['completed', 'pending'] as const
+  const out = classify(
+    [
+      s('asked', { turnAsk }),
+      // the question stands ahead of what the chat waits for and of its unfinished plan: the person's move comes first
+      s('both', { turnAsk, plan: [...half], tasks: [{ id: 't', kind: 'bash', what: 'build', at: NOW - 60_000 }], waitsFor: [{ id: 'x', title: 'other' }] }),
+      s('blocked', { turnAsk, needsAnswer: true }),
+      s('bad', { turnAsk, error: FAIL }),
+      // a chat that runs has begun a new turn: the old question is not asked of the person any more
+      s('busy', { turnAsk, isRunning: true }),
+      s('plain'),
+    ],
+    emptyMemory(),
+    NOW,
+  )
+  const groups = groupSessions(out.rooms)
+  expect(groups.map(g => [g.key, g.items.map(x => x.w.id).sort()])).toEqual([
+    ['err', ['bad']],
+    ['ask', ['blocked']],
+    ['turn', ['asked', 'both']],
+    ['work', ['busy']],
+  ])
+  const turn = groups.find(g => g.key === 'turn')!
+  expect(turn.title).toBe('Потребують рішення')
+  // not the pink of a decision, nor the orange of a permission
+  expect(turn.color).not.toBe(groups.find(g => g.key === 'ask')!.color)
+  expect(turn.color).not.toBe(GROUP_COLOR.decide)
+  const w = (id: string) => out.rooms[0]!.workers.find(x => x.id === id)!
+  expect(w('asked').turnAsk).toEqual(turnAsk)
+  expect(w('busy').turnAsk).toBeUndefined()
+  expect(groupKeyOf(w('both'))).toBe('turn')
+})
+
+test('a chat that has just finished and ended on a question is in the question list, not in the finished one', () => {
+  const turnAsk = { text: 'Закомітити?' }
+  const first = classify([s('a', { isRunning: true })], emptyMemory(), NOW)
+  const second = classify([s('a', { turnAsk })], first.memory, NOW + 5000)
+  expect(second.rooms[0]!.workers[0]!.kind).toBe('wait')
+  expect(groupSessions(second.rooms).map(g => g.key)).toEqual(['turn'])
 })

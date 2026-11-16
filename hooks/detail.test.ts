@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import type { Room, Worker } from '../types'
-import { compact, decisionText, detailRows, detailScript, dollars, lasting, mcpName, parseDetail, stateSince, stateWord, tasksText, waitsText } from './detail'
+import { askText, compact, decisionText, detailRows, detailScript, dollars, lasting, mcpName, parseDetail, stateSince, stateWord, tasksText, waitsText } from './detail'
 
 const NOW = Date.parse('2026-11-12T12:00:00Z')
 const MIN = 60_000
@@ -196,4 +196,25 @@ test('the scripts find the transcript of a chat under CLAUDE_CONFIG_DIR first, s
   expect(script).toContain('$env:CLAUDE_CONFIG_DIR')
   expect(script.indexOf('$env:CLAUDE_CONFIG_DIR')).toBeLessThan(script.indexOf('$env:USERPROFILE'))
   expect(script.includes('"')).toBe(false)
+})
+
+test('a chat that stopped on a question to the person says so in the accordion: the question, for how long, and the state', () => {
+  const w = worker({ kind: 'rest', turnAsk: { text: 'Що робимо з залишками КП?', at: NOW - 7 * MIN } })
+  const rows = Object.fromEntries(detailRows(w, room, undefined, NOW))
+  expect(rows['Питання']).toBe('Що робимо з залишками КП? · 7 хв')
+  expect(rows['Стан']).toContain('потребує рішення')
+  // the state counts from the end of the turn
+  expect(stateSince(w, undefined)).toBe(NOW - 7 * MIN)
+  // long and many-lined, it is put on one line and cut
+  const long = { text: `${'слово '.repeat(60)}\n\nкінець` }
+  expect(askText(long, 20)).toBe('слово слово слово с…')
+  expect(askText({ text: 'a\n b' })).toBe('a b')
+  expect(Object.fromEntries(detailRows(worker({ kind: 'rest', turnAsk: long }), room, undefined, NOW))['Питання']!.length).toBeLessThanOrEqual(200)
+  // a chat that is asked something blocking says the stronger thing, and a failure outranks the question
+  expect(stateWord(worker({ kind: 'rest', turnAsk: { text: 'x' }, needsAnswer: true }))).toBe('чекає відповіді')
+  const bad = worker({ kind: 'rest', turnAsk: { text: 'x' }, error: { code: 'x', text: 't', at: NOW } })
+  expect(stateWord(bad)).toBe('помилка')
+  expect(Object.fromEntries(detailRows(bad, room, undefined, NOW))['Питання']).toBeUndefined()
+  // and one with no question has no such row
+  expect(Object.fromEntries(detailRows(worker({}), room, undefined, NOW))['Питання']).toBeUndefined()
 })

@@ -4,7 +4,7 @@ import type { EngineInterface, Register, Timer } from 'claude-code'
 import type { Detail, DetailState, ErrorCache, Memory, Office, RawSession, Room, SketchCache, View, Worker } from '../types'
 import { ack, ago, agoText, classify, emptyMemory, GROUP_COLOR, GROUP_MARK, groupSessions, parseSessions, RED, summary, WORD } from './data'
 import type { Group } from './data'
-import { decisionText, detailRows, detailScript, mcpName, parseDetail, tasksText, waitsText } from './detail'
+import { askText, decisionText, detailRows, detailScript, mcpName, parseDetail, tasksText, waitsText } from './detail'
 import { errorLabel, errorOf, errorsScript, needsCheck, nextCache, parseErrors, parsePeers, peerOf, waitOf } from './errors'
 import { floorSvg } from './floor'
 import { galaxySvg, REST_COLOR, steady } from './galaxy'
@@ -609,11 +609,16 @@ export const register: Register = on => {
             {w.plan && w.plan.length > 0 && <Text dimColor>{`план ${planProgress(w.plan)}`}</Text>}
             {w.error && <Text color={RED}>{`${errorLabel(w.error)} · ${agoText(w.error.at, now)}`}</Text>}
             {openIcon(w)}
-            {(g.key === 'done' || (g.key === 'plan' && w.kind === 'wait')) && seenIcon(w)}
+            {(g.key === 'done' || ((g.key === 'plan' || g.key === 'turn') && w.kind === 'wait')) && seenIcon(w)}
           </Box>
           {w.decision && !w.error && (
             <Box paddingLeft={2}>
               <Text color={g.color}>{`чекає рішення: ${decisionText(w.decision)}`}</Text>
+            </Box>
+          )}
+          {w.turnAsk && g.key === 'turn' && (
+            <Box paddingLeft={2}>
+              <Text color={g.color}>{`питання: ${askText(w.turnAsk, 120)}`}</Text>
             </Box>
           )}
           {waitsText(w) && !w.error && !w.needsAnswer && (

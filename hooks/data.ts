@@ -97,6 +97,8 @@ export function classify(raw: RawSession[], prev: Memory, now: number): Classifi
         ...(s.needsAnswer ? { needsAnswer: true, ...(s.askedAt ? { askedAt: s.askedAt } : {}) } : {}),
         // a question or a plan put to the person counts only while the chat is blocked on the person: the registry says so
         ...(s.needsAnswer && s.decision ? { decision: s.decision } : {}),
+        // the turn's last word was a question to the person: counts only while the chat stands (a new turn has begun otherwise)
+        ...(!s.isRunning && s.turnAsk ? { turnAsk: s.turnAsk } : {}),
         ...(!s.isRunning && waits(s).length ? { waitsFor: waits(s) } : {}),
         // only a chat that is running is held up by a tool: for one that has stopped, a call left open is a leftover
         ...(s.isRunning && s.mcp ? { mcp: s.mcp } : {}),
@@ -142,7 +144,7 @@ export function ack(mem: Memory, id: string): Memory {
   return { ...mem, sessions: { ...mem.sessions, [id]: { ...one, isAcked: true } } }
 }
 
-export type GroupKey = 'err' | 'decide' | 'ask' | 'agent' | 'task' | 'plan' | 'work' | 'done'
+export type GroupKey = 'err' | 'decide' | 'ask' | 'turn' | 'agent' | 'task' | 'plan' | 'work' | 'done'
 
 /** A plan with a step that is not done: the chat may have stopped halfway. */
 export const hasOpenPlan = (w: Worker): boolean => !!w.plan?.some(s => s !== 'completed')
@@ -159,14 +161,17 @@ const GROUP_DEFS: { key: GroupKey; title: string; color: string; has: (w: Worker
   // plain asks (a permission), in a colour of its own so that it is told from them at a glance
   { key: 'decide', title: 'Чекають рішення', color: '#E879B9', has: w => !w.error && !!w.needsAnswer && !!w.decision },
   { key: 'ask', title: 'Потребують відповіді', color: '#E8943A', has: w => !w.error && !!w.needsAnswer && !w.decision },
-  { key: 'agent', title: 'Чекають іншого агента', color: '#A98BE0', has: w => !w.error && !w.needsAnswer && !!w.waitsFor },
+  // the chat has stopped on a question to the person (the ask of its wrap-up box): nothing blocks on it, so it is no ask or
+  // decision above, but the next move is the person's all the same; ahead of the waits, which the person may leave be
+  { key: 'turn', title: 'Потребують рішення', color: '#D9B44A', has: w => !w.error && !w.needsAnswer && !!w.turnAsk && w.kind !== 'work' },
+  { key: 'agent', title: 'Чекають іншого агента', color: '#A98BE0', has: w => !w.error && !w.needsAnswer && !w.turnAsk && !!w.waitsFor },
   // stopped, but what it started in the background (a command, a monitor) is still going: the colour of a wait
-  { key: 'task', title: 'Чекають фонову задачу', color: '#A98BE0', has: w => !w.error && !w.needsAnswer && !w.waitsFor && w.kind !== 'work' && !!w.tasks?.length },
+  { key: 'task', title: 'Чекають фонову задачу', color: '#A98BE0', has: w => !w.error && !w.needsAnswer && !w.turnAsk && !w.waitsFor && w.kind !== 'work' && !!w.tasks?.length },
   // stopped (so the plan is not simply being worked through) with a step left undone and nothing else it waits for: the
   // chat that was left halfway; ahead of "finished", for a chat that ended its turn with the plan unfinished is not done
-  { key: 'plan', title: 'Незавершений план', color: '#4DB6AC', has: w => !w.error && !w.needsAnswer && !w.waitsFor && w.kind !== 'work' && !w.tasks?.length && hasOpenPlan(w) },
+  { key: 'plan', title: 'Незавершений план', color: '#4DB6AC', has: w => !w.error && !w.needsAnswer && !w.turnAsk && !w.waitsFor && w.kind !== 'work' && !w.tasks?.length && hasOpenPlan(w) },
   { key: 'work', title: 'У роботі', color: '#6FA8DC', has: w => !w.error && !w.needsAnswer && !w.waitsFor && w.kind === 'work' },
-  { key: 'done', title: 'Завершені, чекають', color: '#7FBF8E', has: w => !w.error && !w.needsAnswer && !w.waitsFor && w.kind === 'wait' },
+  { key: 'done', title: 'Завершені, чекають', color: '#7FBF8E', has: w => !w.error && !w.needsAnswer && !w.turnAsk && !w.waitsFor && w.kind === 'wait' },
 ]
 
 /** The list a chat is in, if any: its colour is the one the chat is drawn in, whatever the theme. */
@@ -177,7 +182,7 @@ export const GROUP_COLOR = Object.fromEntries(GROUP_DEFS.map(d => [d.key, d.colo
 export const GROUP_TITLE = Object.fromEntries(GROUP_DEFS.map(d => [d.key, d.title])) as Record<GroupKey, string>
 
 /** The glyph in front of a chat in its list (and in the legend): the colour says the state, this says it without colour. */
-export const GROUP_MARK = { err: '✕', decide: '◆', ask: '?', agent: '…', task: '…', plan: '◐', work: '▶', done: '!', rest: '·' } as const
+export const GROUP_MARK = { err: '✕', decide: '◆', ask: '?', turn: '◇', agent: '…', task: '…', plan: '◐', work: '▶', done: '!', rest: '·' } as const
 
 /** The sessions of the given rooms in the three lists the pane shows, in that order; a list with nobody in it is left out. */
 export function groupSessions(rooms: Room[]): Group[] {

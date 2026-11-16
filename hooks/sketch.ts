@@ -1,4 +1,4 @@
-import type { Decision, McpWait, PlanItem, RawSession, Sketch, SketchCache } from '../types'
+import type { Decision, McpWait, PlanItem, RawSession, Sketch, SketchCache, TurnAsk } from '../types'
 import { HOME_MS } from './data'
 import { CLAUDE_DIR_PS, transcriptGlobPs } from './paths'
 import { planFrom } from './plan'
@@ -15,6 +15,8 @@ export const MAX_SKETCHED = 12
 export const CHUNK_BYTES = 8 * 1024 * 1024
 /** A chat that is running moves all the time: it is read again at most this often. */
 export const RUNNING_EVERY_MS = 20000
+/** What the reader knows: a cache made by an older one is read once more, for it lacks what has been added since. */
+export const SKETCH_VERSION = 2
 
 /** Steps of a chat's output tokens: the size of its star. */
 export const sizeStep = (out: number): number => (out < 1e3 ? 0 : out < 1e4 ? 1 : out < 1e5 ? 2 : out < 5e5 ? 3 : 4)
@@ -30,7 +32,7 @@ export function needsSketch(raw: RawSession[], cache: SketchCache, now: number, 
       if (s.isArchived) return false
       if (!s.isRunning && now - (Date.parse(s.lastActivityAt) || 0) >= HOME_MS) return false
       const c = cache[s.sessionId]
-      if (c && c.at === s.lastActivityAt && c.offset >= c.size) return false
+      if (c && c.v === SKETCH_VERSION && c.at === s.lastActivityAt && c.offset >= c.size) return false
       // running chats move at every poll: not every poll is a reason to read
       if (c && s.isRunning && now - (readAt.get(s.sessionId) ?? 0) < RUNNING_EVERY_MS) return false
       return true
@@ -68,6 +70,10 @@ export function sketchScript(items: { id: string; offset: number }[]): string {
     "$p11 = $q + 'type' + $q + ':' + $q + 'tool_use' + $q",
     "$p10 = $p11 + ',' + $q + 'id' + $q + ':' + $q + '([^' + $q + ']+)' + $q + ',' + $q + 'name' + $q + ':' + $q + '(mcp__[^' + $q + ']+|AskUserQuestion|ExitPlanMode)'",
     "$p12 = $q + 'timestamp' + $q + ':' + $q + '([^' + $q + ']+)'",
+    // the question the last turn ended on, and when: the chat's own file keeps both (`turnWrapUp.needsUser`), as JSON text.
+    // The pattern is: "needsUser":"(any run of non-quote non-backslash characters, or a backslash and the one after it)"
+    "$pn = $q + 'needsUser' + $q + ':' + $q + '((?:[^' + $q + '\\\\]|\\\\.)*)' + $q",
+    "$pe = $q + 'lastTurnEdgeAt' + $q + ':([0-9]+)'",
     // work started in the background: the calls that start (or stop) it, the answers that name it, the notices that end it
     "$pb1 = $q + 'run_in_background' + $q + ':true'",
     "$pb2 = $q + 'name' + $q + ':' + $q + 'Monitor' + $q",
@@ -84,6 +90,10 @@ export function sketchScript(items: { id: string; offset: number }[]): string {
     '  $m = Get-ChildItem -Path $mp -File | Select-Object -First 1',
     '  if ($m) {',
     '    $raw = [IO.File]::ReadAllText($m.FullName)',
+    '    $nu = [regex]::Match($raw, $pn); $ne = [regex]::Match($raw, $pe)',
+    '    $ask = $null; $edge = $null',
+    '    if ($nu.Success) { $ask = $nu.Groups[1].Value }',
+    '    if ($ne.Success) { $edge = $ne.Groups[1].Value }',
     "    $c = [regex]::Match($raw, $q + 'cliSessionId' + $q + ':' + $q + '?([^,' + $q + '}]*)')",
     '    if ($c.Success) {',
     `      $tp = ${transcriptGlobPs('$c.Groups[1].Value')}`,
@@ -150,7 +160,7 @@ export function sketchScript(items: { id: string; offset: number }[]): string {
     '            }',
     '          }',
     '        }',
-    '        $r = @{ from = $off; offset = ($off + $used); size = $len; plan = $plan; cost = $cost; ctx = $ctx; mcp = $mcp; bg = $bg }',
+    '        $r = @{ from = $off; offset = ($off + $used); size = $len; plan = $plan; cost = $cost; ctx = $ctx; mcp = $mcp; bg = $bg; ask = $ask; edge = $edge }',
     '      }',
     '    }',
     '  }',
@@ -170,6 +180,7 @@ export type Piece = {
   ctx?: string
   mcp?: McpWait
   decision?: Decision
+  ask?: TurnAsk
   /** the lines of the piece that begin, name or end a task started in the background */
   bg?: string[]
 }
@@ -196,6 +207,20 @@ export function decisionOf(v: unknown): Decision | undefined {
   return { kind, ...(Number.isFinite(ms) ? { at: ms } : {}) }
 }
 
+/** The question a turn ended on: the text as the file spells it (a JSON string without its quotes) and the time the turn ended. */
+export function askOf(text: unknown, edge: unknown): TurnAsk | undefined {
+  if (typeof text !== 'string' || text === '') return undefined
+  let plain: unknown
+  try {
+    plain = JSON.parse(`"${text}"`)
+  } catch {
+    plain = text
+  }
+  if (typeof plain !== 'string' || plain.trim() === '') return undefined
+  const at = Number(edge)
+  return { text: plain.trim(), ...(Number.isFinite(at) && at > 0 ? { at } : {}) }
+}
+
 /** What sketchScript printed, per chat; anything unreadable is nothing. */
 export function parseSketches(stdout: string): Record<string, Piece> {
   let top: unknown
@@ -219,6 +244,7 @@ export function parseSketches(stdout: string): Record<string, Piece> {
     const plan = typeof o.plan === 'string' ? [o.plan] : Array.isArray(o.plan) ? o.plan.filter((x): x is string => typeof x === 'string') : []
     const mcp = mcpOf(o.mcp)
     const decision = decisionOf(o.mcp)
+    const ask = askOf(o.ask, o.edge)
     const bg = typeof o.bg === 'string' ? [o.bg] : Array.isArray(o.bg) ? o.bg.filter((x): x is string => typeof x === 'string') : []
     out[id] = {
       from: num(o.from) ?? 0,
@@ -229,6 +255,7 @@ export function parseSketches(stdout: string): Record<string, Piece> {
       ...(typeof o.ctx === 'string' ? { ctx: o.ctx } : {}),
       ...(mcp ? { mcp } : {}),
       ...(decision ? { decision } : {}),
+      ...(ask ? { ask } : {}),
       ...(bg.length ? { bg } : {}),
     }
   }
@@ -277,12 +304,12 @@ export function nextSketches(cache: SketchCache, raw: RawSession[], checked: Raw
     const piece = found[s.sessionId]
     if (!piece) {
       out[s.sessionId] = prev
-        ? { ...prev, at: s.lastActivityAt, size: prev.offset }
-        : { at: s.lastActivityAt, offset: 0, size: 0, none: true }
+        ? { ...prev, at: s.lastActivityAt, size: prev.offset, v: SKETCH_VERSION }
+        : { at: s.lastActivityAt, offset: 0, size: 0, none: true, v: SKETCH_VERSION }
       continue
     }
     if (piece.none) {
-      out[s.sessionId] = { at: s.lastActivityAt, offset: 0, size: 0, none: true }
+      out[s.sessionId] = { at: s.lastActivityAt, offset: 0, size: 0, none: true, v: SKETCH_VERSION }
       continue
     }
     // read again from the start: what was held belongs to a transcript that is gone
@@ -306,6 +333,8 @@ export function nextSketches(cache: SketchCache, raw: RawSession[], checked: Raw
       // not carried on: it is the state at the end of the transcript, read afresh each time the end is reached
       ...(piece.mcp ? { mcp: piece.mcp } : {}),
       ...(piece.decision ? { decision: piece.decision } : {}),
+      ...(piece.ask ? { ask: piece.ask } : {}),
+      v: SKETCH_VERSION,
       ...(tasks.length ? { tasks } : {}),
     }
   }
@@ -322,6 +351,7 @@ export function withSketches(raw: RawSession[], cache: SketchCache): RawSession[
       ...(c.plan?.length ? { plan: c.plan.map(p => p.status) } : {}),
       ...(c.mcp ? { mcp: c.mcp } : {}),
       ...(c.decision ? { decision: c.decision } : {}),
+      ...(c.ask ? { turnAsk: c.ask } : {}),
       ...(c.tasks?.length ? { tasks: c.tasks } : {}),
       ...(c.context !== undefined || c.out !== undefined || c.cache !== undefined
         ? { weight: { size: c.context !== undefined ? contextStep(c.context) : sizeStep(c.out ?? 0), haze: hazeStep(c.cache ?? 0) } }
@@ -334,6 +364,6 @@ export function withSketches(raw: RawSession[], cache: SketchCache): RawSession[
 export const sketchLook = (cache: SketchCache): string =>
   JSON.stringify(
     Object.entries(cache)
-      .map(([id, c]) => [id, c.plan?.map(p => p.status[0]).join(''), c.context !== undefined ? contextStep(c.context) : sizeStep(c.out ?? 0), hazeStep(c.cache ?? 0), c.mcp ? `${c.mcp.server}/${c.mcp.tool}` : '', c.decision?.kind ?? '', c.tasks?.map(t => t.id).join(',') ?? ''])
+      .map(([id, c]) => [id, c.plan?.map(p => p.status[0]).join(''), c.context !== undefined ? contextStep(c.context) : sizeStep(c.out ?? 0), hazeStep(c.cache ?? 0), c.mcp ? `${c.mcp.server}/${c.mcp.tool}` : '', c.decision?.kind ?? '', c.ask ? `${c.ask.text}@${c.ask.at ?? ''}` : '', c.tasks?.map(t => t.id).join(',') ?? ''])
       .sort(),
   )

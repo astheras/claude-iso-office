@@ -24,6 +24,13 @@ export type McpWait = { server: string; tool: string; at?: number }
 export type Decision = { kind: 'question' | 'plan'; at?: number }
 
 /**
+ * The question a chat ended its last turn on: the `ask` of its wrap-up box, which the app keeps in the chat's own file
+ * (`turnWrapUp.needsUser`). Nothing blocks on it (the registry says idle, no call is open): the chat has stopped and the
+ * next move is the person's. `at` is when that turn ended (ms).
+ */
+export type TurnAsk = { text: string; at?: number }
+
+/**
  * Work a chat started in the background and has not been told is over: a command run in the background, or a monitor.
  * `what` is its description; `mcp` says the command goes to an MCP server (its text names one); `at` is when it began (ms).
  */
@@ -60,6 +67,8 @@ export type RawSession = {
   mcp?: McpWait
   /** the question or plan its transcript ends on, not yet answered */
   decision?: Decision
+  /** the question its last turn ended on (read from the chat's own file) */
+  turnAsk?: TurnAsk
   /** what it started in the background and is still open, read from its transcript */
   tasks?: BgTask[]
   /** how big its output and its cache are, in steps (read from its transcript) */
@@ -93,6 +102,8 @@ export type Worker = {
   plan?: PlanStatus[]
   /** blocked on the person AND the agent has put a decision to them (a question with options, a plan): its own list */
   decision?: Decision
+  /** it has stopped on a question to the person that nothing blocks on: its own list, "need a decision" */
+  turnAsk?: TurnAsk
   /** it is running, but held up by an MCP tool that has not answered */
   mcp?: McpWait
   /** it has stopped, but what it started in the background is still going: it waits for that */
@@ -151,6 +162,10 @@ export type Sketch = {
   mcp?: McpWait
   /** the question or plan the transcript ended on at that read, if it had not been answered */
   decision?: Decision
+  /** the question the chat's last turn ended on, as of that read */
+  ask?: TurnAsk
+  /** which version of the reader made this: an older one did not know every field, so the chat is read once more */
+  v?: number
   /** the tasks started in the background that are still open, as of the end of what was read */
   tasks?: BgTask[]
 }

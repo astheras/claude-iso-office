@@ -1,4 +1,4 @@
-import type { BgTask, Decision, Detail, McpWait, Room, Worker } from '../types'
+import type { BgTask, Decision, Detail, McpWait, Room, TurnAsk, Worker } from '../types'
 import { agoText, groupKeyOf, WORD } from './data'
 import { errorLabel } from './errors'
 import { CLAUDE_DIR_PS, transcriptGlobPs } from './paths'
@@ -36,6 +36,7 @@ export const stamp = (ms: number): string => {
 export function stateSince(w: Worker, d: Detail | undefined): number {
   if (w.error && w.error.at) return w.error.at
   if (w.needsAnswer && w.askedAt) return w.askedAt
+  if (w.turnAsk?.at) return w.turnAsk.at
   return d?.turnEdgeAt || w.changedAt
 }
 
@@ -150,6 +151,8 @@ export function detailRows(w: Worker, room: Room, d: Detail | undefined, now: nu
   }
   add('Стан', `${stateWord(w)} · ${lasting(now - stateSince(w, d))}`, w.error ? 'bad' : undefined)
   if (w.decision && !w.error) add('Рішення', `${decisionText(w.decision)}${w.decision.at ? ` · ${lasting(now - w.decision.at)}` : ''}`)
+  // the question its last turn ended on: said in full (cut at a length the accordion can hold), and how long it has stood
+  if (w.turnAsk && groupKeyOf(w) === 'turn') add('Питання', `${askText(w.turnAsk, 200)}${w.turnAsk.at ? ` · ${lasting(now - w.turnAsk.at)}` : ''}`)
   if (w.waitsFor?.length) add('Чекає', w.waitsFor.map(waitText).join('; '))
   // a call to an MCP tool that has not answered: which server and which tool, and for how long (a question to the person is not this)
   if (w.mcp && !w.needsAnswer) add('Чекає MCP', `${mcpName(w.mcp)}${w.mcp.at ? ` · ${lasting(now - w.mcp.at)}` : ''}`)
@@ -205,16 +208,24 @@ export const stateWord = (w: Worker): string =>
       ? w.decision
         ? 'чекає рішення'
         : 'чекає відповіді'
-      : w.waitsFor
-        ? 'чекає іншого агента'
-        : w.tasks?.length
-          ? 'чекає фонову задачу'
-          : groupKeyOf(w) === 'plan'
-            ? 'план не завершено'
-            : WORD[w.kind]
+      : groupKeyOf(w) === 'turn'
+        ? 'потребує рішення'
+        : w.waitsFor
+          ? 'чекає іншого агента'
+          : w.tasks?.length
+            ? 'чекає фонову задачу'
+            : groupKeyOf(w) === 'plan'
+              ? 'план не завершено'
+              : WORD[w.kind]
 
 /** What the agent has put to the person: «питання з варіантами» or «план на схвалення». */
 export const decisionText = (x: Decision): string => (x.kind === 'plan' ? 'план на схвалення' : 'питання з варіантами')
+
+/** The question a turn ended on, on one line and cut to `max` characters. */
+export const askText = (x: TurnAsk, max = 80): string => {
+  const t = x.text.replace(/\s+/g, ' ').trim()
+  return t.length > max ? `${t.slice(0, max - 1)}…` : t
+}
 
 /** One thing a chat waits for: «Unity (Їжа для комплексів)», or just the chat's title. */
 export const waitText = (x: { title: string; on?: string }): string => (x.on ? `${x.on} (${x.title})` : x.title)

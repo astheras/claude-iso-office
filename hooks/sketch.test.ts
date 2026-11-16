@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import type { RawSession, SketchCache } from '../types'
-import { CHUNK_BYTES, contextStep, hazeStep, MAX_SKETCHED, needsSketch, nextSketches, parseSketches, RUNNING_EVERY_MS, sizeStep, sketchLook, sketchScript, withSketches } from './sketch'
+import { askOf, CHUNK_BYTES, contextStep, hazeStep, MAX_SKETCHED, needsSketch, nextSketches, parseSketches, RUNNING_EVERY_MS, sizeStep, SKETCH_VERSION, sketchLook, sketchScript, withSketches } from './sketch'
 
 const NOW = Date.parse('2026-11-13T12:00:00Z')
 const AT = '2026-11-13T11:50:00.000Z'
@@ -19,12 +19,14 @@ const piece = (o: Record<string, unknown>) => JSON.stringify({ a: { from: 0, off
 
 test('a chat is read when it was never read, when it moved, or when it was not read to the end', () => {
   const cache: SketchCache = {
-    done: { at: AT, offset: 50, size: 50 },
-    moved: { at: '2026-11-13T11:00:00.000Z', offset: 50, size: 50 },
-    more: { at: AT, offset: 10, size: 50 },
+    done: { at: AT, offset: 50, size: 50, v: SKETCH_VERSION },
+    moved: { at: '2026-11-13T11:00:00.000Z', offset: 50, size: 50, v: SKETCH_VERSION },
+    more: { at: AT, offset: 10, size: 50, v: SKETCH_VERSION },
+    // read by an older reader, which did not know every field: read once more though nothing moved
+    old: { at: AT, offset: 50, size: 50 },
   }
-  const list = [raw('new'), raw('done'), raw('moved'), raw('more')]
-  expect(needsSketch(list, cache, NOW).map(s => s.sessionId)).toEqual(['new', 'moved', 'more'])
+  const list = [raw('new'), raw('done'), raw('moved'), raw('more'), raw('old')]
+  expect(needsSketch(list, cache, NOW).map(s => s.sessionId)).toEqual(['new', 'moved', 'more', 'old'])
 })
 
 test('a chat that is archived, or idle over three days, is not read', () => {
@@ -94,7 +96,7 @@ test('a transcript that was rewritten is read again from the start, what was hel
 test('a chat with no transcript is marked, and read again only when it moves', () => {
   const s = raw('a')
   const next = nextSketches({}, [s], [s], parseSketches('{"a":{"none":true}}'))
-  expect(next.a).toEqual({ at: AT, offset: 0, size: 0, none: true })
+  expect(next.a).toEqual({ at: AT, offset: 0, size: 0, none: true, v: SKETCH_VERSION })
   expect(needsSketch([s], next, NOW)).toEqual([])
 })
 
@@ -287,5 +289,45 @@ test('the script looks for the two calls that put a decision to the person, and 
   // CLAUDE_CONFIG_DIR first, the home folder after: a folder moved to another disk is still found
   expect(script).toContain('$env:CLAUDE_CONFIG_DIR')
   expect(script.indexOf('$env:CLAUDE_CONFIG_DIR')).toBeLessThan(script.indexOf('$env:USERPROFILE'))
+  expect(script.includes('"')).toBe(false)
+})
+
+test('the question a turn ended on is the JSON text of the chat file, read as plain text, with the time the turn ended', () => {
+  expect(askOf('Що робимо з залишками КП?', '1794845643518')).toEqual({ text: 'Що робимо з залишками КП?', at: 1794845643518 })
+  // escapes as the file spells them: an apostrophe as a backslash and u0027, a quote as a backslash and a quote
+  const apostrophe = ['\\', 'u0027'].join('')
+  expect(askOf(String.raw`Закомітити ${apostrophe}все${apostrophe} \"зараз\"?\n`, 5)).toEqual({ text: `Закомітити 'все' "зараз"?`, at: 5 })
+  // a text that is not valid JSON once quoted is kept as it is
+  expect(askOf(String.raw`a \q b`, undefined)).toEqual({ text: String.raw`a \q b` })
+  // nothing asked: no question
+  for (const none of ['', '   ', null, undefined, 5]) expect(askOf(none, 1)).toBeUndefined()
+  // a time that is no time is left out
+  expect(askOf('x', 'soon')).toEqual({ text: 'x' })
+})
+
+test('the question is read from the answer of the script, carried to the chat, and the drawing is made again when it comes or goes', () => {
+  const s = raw('a')
+  const asked = nextSketches({}, [s], [s], parseSketches(piece({ ask: 'Що далі?', edge: '1794845643518' })))
+  expect(asked.a!.ask).toEqual({ text: 'Що далі?', at: 1794845643518 })
+  expect(asked.a!.v).toBe(SKETCH_VERSION)
+  expect(withSketches([s], asked)[0]!.turnAsk).toEqual({ text: 'Що далі?', at: 1794845643518 })
+  // a later read of the same chat that finds no question clears it
+  const after = nextSketches(asked, [s], [s], parseSketches(piece({ from: 100, offset: 120, size: 120 })))
+  expect(after.a!.ask).toBeUndefined()
+  expect(withSketches([s], after)[0]!.turnAsk).toBeUndefined()
+  expect(sketchLook(asked)).not.toBe(sketchLook(after))
+  // a run that read nothing leaves the question as it was, and does not ask again at once
+  const kept = nextSketches(asked, [{ ...s, lastActivityAt: '2026-11-13T11:55:00.000Z' }], [{ ...s, lastActivityAt: '2026-11-13T11:55:00.000Z' }], {})
+  expect(kept.a!.ask).toEqual(asked.a!.ask)
+  expect(kept.a!.v).toBe(SKETCH_VERSION)
+})
+
+test('the script reads the question and the end of the turn from the file of the chat itself', () => {
+  const script = sketchScript([{ id: 'a', offset: 0 }])
+  expect(script).toContain('needsUser')
+  expect(script).toContain('lastTurnEdgeAt')
+  // the pattern for the text: anything but a quote or a backslash, or a backslash and the character after it; PowerShell
+  // keeps a backslash as it is, so the regex needs two to mean one
+  expect(script).toContain(String.raw`\\]|\\.)*)`)
   expect(script.includes('"')).toBe(false)
 })

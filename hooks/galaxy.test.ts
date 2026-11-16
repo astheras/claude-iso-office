@@ -587,3 +587,13 @@ test('a star left halfway with its plan is told so in its card, in the colour of
   expect(star(svg, 'h')).toContain('план не завершено: 1/3')
   expect(star(svg, 'h')).toContain(`fill="${GROUP_COLOR.plan}"`)
 })
+
+test('a chat that stopped on a question to the person says so in the card of its star, in the colour of its list, and is not lit as a decision is', () => {
+  const out = galaxySvg([room('r', [w('q', 'rest', { title: 'Капітан', turnAsk: { text: 'Що робимо з залишками КП?' } }), w('p', 'rest')])], NOW)
+  expect(out.spots.find(x => x.id === 'q')!.tip).toContain('потребує рішення: Що робимо з залишками КП?')
+  expect(out.spots.find(x => x.id === 'p')!.tip).not.toContain('рішення')
+  expect(out.svg).toContain(GROUP_COLOR.turn)
+  // the pink disc and the badge are for a decision the chat is blocked on, not for this
+  expect(out.svg).not.toContain('data-k="spot"')
+  expect(out.svg).not.toContain('data-k="badge"')
+})
