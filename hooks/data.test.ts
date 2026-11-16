@@ -278,3 +278,34 @@ test('a chat that waits on the person and has put a decision to them has a list 
   expect(groups[1]!.color).not.toBe(groups[2]!.color)
   expect(out.rooms[0]!.workers.find(w => w.id === 'stale')!.decision).toBeUndefined()
 })
+
+test('a chat that stopped with a step of its plan undone has a list of its own; a finished plan, a running chat and any other wait do not', () => {
+  const half = ['completed', 'in_progress', 'pending'] as const
+  const out = classify(
+    [
+      s('half', { plan: [...half] }),
+      s('whole', { plan: ['completed', 'completed'] }),
+      s('busy', { isRunning: true, plan: [...half] }),
+      s('asks', { plan: [...half], needsAnswer: true }),
+      s('failed', { plan: [...half], error: FAIL }),
+      s('bare'),
+    ],
+    emptyMemory(),
+    NOW,
+  )
+  const groups = groupSessions(out.rooms)
+  expect(groups.map(g => [g.key, g.items.map(x => x.w.id)])).toEqual([
+    ['err', ['failed']],
+    ['ask', ['asks']],
+    ['plan', ['half']],
+    ['work', ['busy']],
+  ])
+  expect(groups[2]!.title).toBe('Незавершений план')
+})
+
+test('a chat that has just finished with its plan undone is in the plan list, not in the finished one', () => {
+  const first = classify([s('a', { isRunning: true, plan: ['pending'] })], emptyMemory(), NOW)
+  const second = classify([s('a', { plan: ['pending'] })], first.memory, NOW + 5000)
+  expect(second.rooms[0]!.workers[0]!.kind).toBe('wait')
+  expect(groupSessions(second.rooms).map(g => g.key)).toEqual(['plan'])
+})

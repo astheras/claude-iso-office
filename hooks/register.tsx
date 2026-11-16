@@ -609,7 +609,7 @@ export const register: Register = on => {
             {w.plan && w.plan.length > 0 && <Text dimColor>{`план ${planProgress(w.plan)}`}</Text>}
             {w.error && <Text color={RED}>{`${errorLabel(w.error)} · ${agoText(w.error.at, now)}`}</Text>}
             {openIcon(w)}
-            {g.key === 'done' && seenIcon(w)}
+            {(g.key === 'done' || (g.key === 'plan' && w.kind === 'wait')) && seenIcon(w)}
           </Box>
           {w.decision && !w.error && (
             <Box paddingLeft={2}>

@@ -313,7 +313,8 @@ test('the planet under way stops pulsing when its session is not working, and ta
   expect(err).toContain(`stroke="${GROUP_COLOR.err}"`)
   expect(frozen({ needsAnswer: true }, 'work')).toContain(`stroke="${GROUP_COLOR.ask}"`)
   expect(frozen({ waitsFor: [{ id: 'z', title: 'z' }] })).toContain(`stroke="${GROUP_COLOR.agent}"`)
-  expect(frozen({})).toContain(`stroke="${REST_COLOR}"`)
+  // a stopped chat with nothing else the matter is simply left halfway: the colour of that list
+  expect(frozen({})).toContain(`stroke="${GROUP_COLOR.plan}"`)
   for (const o of [{ error: { code: 'x', text: 't', at: NOW } }, { needsAnswer: true }, {}]) {
     const s = star(galaxySvg([room('r', [w('a', 'rest', { plan, ...o })])], NOW).svg, 'a')
     expect(s).not.toContain('values="2.8;4.8;2.8"')
@@ -578,4 +579,11 @@ test('a badge near the edge of the sky is kept on it', () => {
     expect(Number(m[1]) + Number(m[3])).toBeLessThanOrEqual(width)
     expect(Number(m[2])).toBeGreaterThanOrEqual(0)
   }
+})
+
+test('a star left halfway with its plan is told so in its card, in the colour of its list, and does not fade', () => {
+  const at = NOW - 2 * 24 * 3600_000
+  const svg = galaxySvg([room('r', [w('h', 'rest', { plan: ['completed', 'pending', 'pending'], activityAt: at })])], NOW).svg
+  expect(star(svg, 'h')).toContain('план не завершено: 1/3')
+  expect(star(svg, 'h')).toContain(`fill="${GROUP_COLOR.plan}"`)
 })

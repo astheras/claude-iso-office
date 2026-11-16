@@ -142,7 +142,10 @@ export function ack(mem: Memory, id: string): Memory {
   return { ...mem, sessions: { ...mem.sessions, [id]: { ...one, isAcked: true } } }
 }
 
-export type GroupKey = 'err' | 'decide' | 'ask' | 'agent' | 'task' | 'work' | 'done'
+export type GroupKey = 'err' | 'decide' | 'ask' | 'agent' | 'task' | 'plan' | 'work' | 'done'
+
+/** A plan with a step that is not done: the chat may have stopped halfway. */
+export const hasOpenPlan = (w: Worker): boolean => !!w.plan?.some(s => s !== 'completed')
 
 export const RED = '#E5534B'
 
@@ -159,6 +162,9 @@ const GROUP_DEFS: { key: GroupKey; title: string; color: string; has: (w: Worker
   { key: 'agent', title: 'Чекають іншого агента', color: '#A98BE0', has: w => !w.error && !w.needsAnswer && !!w.waitsFor },
   // stopped, but what it started in the background (a command, a monitor) is still going: the colour of a wait
   { key: 'task', title: 'Чекають фонову задачу', color: '#A98BE0', has: w => !w.error && !w.needsAnswer && !w.waitsFor && w.kind !== 'work' && !!w.tasks?.length },
+  // stopped (so the plan is not simply being worked through) with a step left undone and nothing else it waits for: the
+  // chat that was left halfway; ahead of "finished", for a chat that ended its turn with the plan unfinished is not done
+  { key: 'plan', title: 'Незавершений план', color: '#4DB6AC', has: w => !w.error && !w.needsAnswer && !w.waitsFor && w.kind !== 'work' && !w.tasks?.length && hasOpenPlan(w) },
   { key: 'work', title: 'У роботі', color: '#6FA8DC', has: w => !w.error && !w.needsAnswer && !w.waitsFor && w.kind === 'work' },
   { key: 'done', title: 'Завершені, чекають', color: '#7FBF8E', has: w => !w.error && !w.needsAnswer && !w.waitsFor && w.kind === 'wait' },
 ]
@@ -171,7 +177,7 @@ export const GROUP_COLOR = Object.fromEntries(GROUP_DEFS.map(d => [d.key, d.colo
 export const GROUP_TITLE = Object.fromEntries(GROUP_DEFS.map(d => [d.key, d.title])) as Record<GroupKey, string>
 
 /** The glyph in front of a chat in its list (and in the legend): the colour says the state, this says it without colour. */
-export const GROUP_MARK = { err: '✕', decide: '◆', ask: '?', agent: '…', task: '…', work: '▶', done: '!', rest: '·' } as const
+export const GROUP_MARK = { err: '✕', decide: '◆', ask: '?', agent: '…', task: '…', plan: '◐', work: '▶', done: '!', rest: '·' } as const
 
 /** The sessions of the given rooms in the three lists the pane shows, in that order; a list with nobody in it is left out. */
 export function groupSessions(rooms: Room[]): Group[] {
@@ -180,7 +186,8 @@ export function groupSessions(rooms: Room[]): Group[] {
     key: d.key,
     title: d.title,
     color: d.color,
-    items: all.filter(x => d.has(x.w)).sort((a, b) => b.w.activityAt - a.w.activityAt),
+    // a chat is in the first list that has it (the one its star is coloured by), never in two
+    items: all.filter(x => groupKeyOf(x.w) === d.key).sort((a, b) => b.w.activityAt - a.w.activityAt),
   })).filter(g => g.items.length > 0)
 }
 

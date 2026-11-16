@@ -1,5 +1,5 @@
 import type { BgTask, Decision, Detail, McpWait, Room, Worker } from '../types'
-import { agoText, WORD } from './data'
+import { agoText, groupKeyOf, WORD } from './data'
 import { errorLabel } from './errors'
 import { CLAUDE_DIR_PS, transcriptGlobPs } from './paths'
 import { PLAN_MARK, planCount, planFrom } from './plan'
@@ -209,7 +209,9 @@ export const stateWord = (w: Worker): string =>
         ? 'чекає іншого агента'
         : w.tasks?.length
           ? 'чекає фонову задачу'
-          : WORD[w.kind]
+          : groupKeyOf(w) === 'plan'
+            ? 'план не завершено'
+            : WORD[w.kind]
 
 /** What the agent has put to the person: «питання з варіантами» or «план на схвалення». */
 export const decisionText = (x: Decision): string => (x.kind === 'plan' ? 'план на схвалення' : 'питання з варіантами')
