@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { ack, classify, emptyMemory, GROUP_COLOR, groupKeyOf, groupSessions, HOME_MS, parseSessions, roomOf, summary, WAIT_MS } from './data'
+import { ack, byProject, classify, emptyMemory, GROUP_COLOR, groupKeyOf, groupSessions, HOME_MS, parseSessions, roomOf, summary, WAIT_MS } from './data'
 import { MAX_TASK_MS } from './tasks'
 import type { RawSession } from '../types'
 
@@ -119,6 +119,23 @@ test('sessions are listed in three groups: needs an answer, working, finished an
   expect(groups.flatMap(g => g.items).some(x => x.w.id === 'idle')).toBe(false)
   const mine = groupSessions(out.rooms.filter(r => r.name === 'my project'))
   expect(mine.flatMap(g => g.items.map(x => x.room.name))).not.toContain('shop')
+})
+
+test('byProject splits a list by project, the project with the freshest session first', () => {
+  const room = (key: string) => ({ key, name: key, type: 'project' as const, workers: [], homeCount: 0, prNumbers: [] })
+  const a = room('a')
+  const b = room('b')
+  const w = (id: string) => ({ id }) as any
+  const items = [
+    { w: w('1'), room: b },
+    { w: w('2'), room: a },
+    { w: w('3'), room: b },
+  ]
+  const out = byProject(items)
+  expect(out.map(p => [p.room.key, p.items.map(x => x.w.id)])).toEqual([
+    ['b', ['1', '3']],
+    ['a', ['2']],
+  ])
 })
 
 test('a group with nobody in it is left out', () => {

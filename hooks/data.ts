@@ -196,6 +196,17 @@ export function groupSessions(rooms: Room[]): Group[] {
   })).filter(g => g.items.length > 0)
 }
 
+/** The items of one list split by project: the project with the freshest session first, the sessions inside as they were. */
+export function byProject(items: Group['items']): { room: Room; items: Group['items'] }[] {
+  const out: { room: Room; items: Group['items'] }[] = []
+  for (const x of items) {
+    const one = out.find(p => p.room.key === x.room.key)
+    if (one) one.items.push(x)
+    else out.push({ room: x.room, items: [x] })
+  }
+  return out
+}
+
 export const WORD: Record<Kind, string> = {
   work: 'працює',
   wait: 'закінчив, чекає',

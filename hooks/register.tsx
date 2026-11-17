@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, Timer } from 'claude-code'
 
 import type { Detail, DetailState, ErrorCache, Memory, Office, RawSession, Room, SketchCache, ThemeChoice, View, Worker } from '../types'
-import { ack, ago, agoText, classify, emptyMemory, GROUP_COLOR, GROUP_MARK, groupSessions, parseSessions, RED, summary, WORD } from './data'
+import { ack, ago, agoText, byProject, classify, emptyMemory, GROUP_COLOR, GROUP_MARK, groupSessions, parseSessions, RED, summary, WORD } from './data'
 import type { Group } from './data'
 import { askText, decisionText, detailRows, detailScript, mcpName, parseDetail, tasksText, waitsText } from './detail'
 import { errorLabel, errorOf, errorsScript, needsCheck, nextCache, parseErrors, parsePeers, peerOf, waitOf } from './errors'
@@ -634,7 +634,7 @@ export const register: Register = on => {
       </Box>
     )
 
-    // below the drawing: sessions in three lists, a title and, under it, the project; only the chosen project when one is.
+    // below the drawing: sessions in lists by state, each split by project, a title and, under it, the PR and plan; only the chosen project when one is.
     // The title is just the name (the group already says the state); the chosen one is bigger and bold.
     const groups = groupSessions(shown)
     const item = (g: { key: keyof typeof GROUP_MARK; color: string }, { w, room: r }: Group['items'][number]) => {
@@ -651,8 +651,7 @@ export const register: Register = on => {
           </Button>
           <Box flexDirection="row" gap={1} paddingLeft={2}>
             <Text dimColor>
-              {r.name}
-              {w.prNumber ? ` · PR ${w.prNumber}` : ''}
+              {w.prNumber ? `PR ${w.prNumber}` : ''}
             </Text>
             {w.plan && w.plan.length > 0 && <Text dimColor>{`план ${planProgress(w.plan)}`}</Text>}
             {w.error && <Text color={RED}>{`${errorLabel(w.error)} · ${agoText(w.error.at, now)}`}</Text>}
@@ -697,7 +696,12 @@ export const register: Register = on => {
             <Text bold color={g.color}>
               {g.title} · {g.items.length}
             </Text>
-            {g.items.map(x => item(g, x))}
+            {byProject(g.items).map(p => (
+              <Box flexDirection="column">
+                <Text size="heading" weight="bold">{`${p.room.name} · ${p.items.length}`}</Text>
+                {p.items.map(x => item(g, x))}
+              </Box>
+            ))}
           </Box>
         ))}
         {/* a session that merely idles is in no list, yet it can be pressed in the picture: its data open here */}

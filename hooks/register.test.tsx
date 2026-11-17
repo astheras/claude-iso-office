@@ -279,7 +279,7 @@ test('the session the pane lives in is drawn working, though list_sessions leave
   await ui.unmount()
 })
 
-test('the desktop list has the groups, each session with its project under the title', async ($, on) => {
+test('the desktop list has the groups, split by project, each session with its PR under the title', async ($, on) => {
   await started($, on)
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
 
@@ -287,9 +287,11 @@ test('the desktop list has the groups, each session with its project under the t
   expect(await ui.find({ type: 'Text', text: /Потребують відповіді · 1/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /У роботі · 2/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /Завершені, чекають/ })).toBeUndefined()
-  // the title is the name alone (no state, no time); the project, and the PR if any, is under it
+  // the title is the name alone (no state, no time); the project is a heading inside the state, the PR is under the title
   expect((await ui.find({ type: 'Button', text: /Chat B/ }))?.text).not.toMatch(/чекає|працює|хв/)
-  expect(await ui.find({ type: 'Text', text: /my project · PR 34/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^my project · 1$/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^PR 34$/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /my project · PR 34/ })).toBeUndefined()
   await ui.unmount()
 })
 
