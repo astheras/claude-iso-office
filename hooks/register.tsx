@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, Timer } from 'claude-code'
 
-import type { Detail, DetailState, ErrorCache, Memory, Office, RawSession, Room, SketchCache, View, Worker } from '../types'
+import type { Detail, DetailState, ErrorCache, Memory, Office, RawSession, Room, SketchCache, ThemeChoice, View, Worker } from '../types'
 import { ack, ago, agoText, classify, emptyMemory, GROUP_COLOR, GROUP_MARK, groupSessions, parseSessions, RED, summary, WORD } from './data'
 import type { Group } from './data'
 import { askText, decisionText, detailRows, detailScript, mcpName, parseDetail, tasksText, waitsText } from './detail'
@@ -11,6 +11,7 @@ import { galaxySvg, REST_COLOR, steady } from './galaxy'
 import { legend } from './legend'
 import { claudeDir } from './paths'
 import { planProgress } from './plan'
+import { DEFAULT_SETTINGS, parseSettings, serializeSettings, settingsPath, THEMES } from './settings'
 import { needsSketch, nextSketches, parseSketches, sketchLook, sketchScript, withSketches } from './sketch'
 import type { Label, Spot } from './floor'
 import { ICON_H, ICON_W, iconSvg } from './icons'
@@ -109,6 +110,13 @@ async function ownSession($: EngineInterface, id: string | undefined): Promise<R
   }
 }
 
+/** Claude's folder: CLAUDE_CONFIG_DIR says where it was moved to, else the home folder has it. Nothing known: undefined. */
+async function claudeBase($: EngineInterface): Promise<string | undefined> {
+  const configDir = await $.env.get('CLAUDE_CONFIG_DIR')
+  const home = (await $.env.get('USERPROFILE')) || (await $.env.get('HOME'))
+  return claudeDir({ configDir: configDir || undefined, home: home || undefined })
+}
+
 /**
  * Ids of the chats that are blocked on the person. list_sessions does not say so, but each running chat keeps a
  * registry file (~/.claude/sessions/<pid>.json) with its `status` and its app id; `waiting` is a permission or a question.
@@ -117,10 +125,8 @@ async function ownSession($: EngineInterface, id: string | undefined): Promise<R
 async function waitingSessions($: EngineInterface): Promise<Map<string, number>> {
   const ids = new Map<string, number>()
   try {
-    // Claude's folder may have been moved to another disk: CLAUDE_CONFIG_DIR says where, else the home folder has it
-    const configDir = await $.env.get('CLAUDE_CONFIG_DIR')
-    const home = (await $.env.get('USERPROFILE')) || (await $.env.get('HOME'))
-    const base = claudeDir({ configDir: configDir || undefined, home: home || undefined })
+    // Claude's folder may have been moved to another disk
+    const base = await claudeBase($)
     if (!base) return ids
     const dir = `${base}/sessions`
     const files = (await $.fs.list(dir)).filter(f => /^\d+\.json$/.test(f.name))
@@ -443,11 +449,44 @@ async function openChat($: EngineInterface, link: string) {
   }
 }
 
+/**
+ * Takes the settings from their file into the pane. A file that is not there (the first run) or cannot be read leaves the
+ * pane as it is, in the defaults; the file is made when the person first changes something.
+ */
+async function loadSettings($: EngineInterface) {
+  try {
+    const base = await claudeBase($)
+    if (!base) return
+    const { theme } = parseSettings(await $.fs.read(settingsPath(base)))
+    await update($, view, v => ({ ...v, theme }))
+  } catch {
+    // no file yet, or it cannot be read: the defaults stand
+  }
+}
+
+/** Writes the settings to their file; the pane says so under the picture when that fails, and the choice still holds for the session. */
+async function saveSettings($: EngineInterface, theme: ThemeChoice) {
+  try {
+    const base = await claudeBase($)
+    if (!base) throw new Error('теку Claude не знайдено')
+    await $.fs.write(settingsPath(base), serializeSettings({ ...DEFAULT_SETTINGS, theme }))
+  } catch (err) {
+    await update($, view, v => ({ ...v, note: `Не вдалося зберегти налаштування: ${String(err instanceof Error ? err.message : err).slice(0, 100)}` }))
+  }
+}
+
+/** Chooses how the work is drawn, for now and for the next start. */
+async function setTheme($: EngineInterface, theme: ThemeChoice) {
+  await update($, view, v => ({ ...v, theme, note: '' }))
+  await saveSettings($, theme)
+}
+
 const waiting = (rooms: Room[]) => rooms.flatMap(r => r.workers.filter(w => w.kind === 'wait'))
 
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
-    await $.command.register({ name: 'office', description: 'Office pane: /office [mute|unmute|seen|legend|theme [office|galaxy]]' })
+    await $.command.register({ name: 'office', description: 'Office pane: /office [mute|unmute|seen|legend|settings|theme [none|office|galaxy]]' })
+    await loadSettings($)
     void open($)
     lastRenderPollAt = 0
     void poll($)
@@ -479,11 +518,17 @@ export const register: Register = on => {
     }
     if (arg === 'theme' || arg.startsWith('theme ')) {
       const asked = arg.slice(5).trim()
-      if (asked !== '' && asked !== 'office' && asked !== 'galaxy') return { text: 'Themes: office, galaxy. /office theme alone switches.' }
+      if (asked !== '' && asked !== 'none' && asked !== 'office' && asked !== 'galaxy') return { text: 'Themes: none, office, galaxy. /office theme alone switches.' }
       const now = (await read($, view)).theme ?? 'galaxy'
-      const next = asked === 'office' || asked === 'galaxy' ? asked : now === 'galaxy' ? 'office' : 'galaxy'
-      await update($, view, v => ({ ...v, theme: next }))
-      return { text: next === 'galaxy' ? 'Theme: galaxies.' : 'Theme: office.' }
+      // without a name it goes between the galaxies and the office (from no picture, to the galaxies)
+      const next: ThemeChoice = asked !== '' ? asked : now === 'galaxy' ? 'office' : 'galaxy'
+      await setTheme($, next)
+      return { text: next === 'galaxy' ? 'Theme: galaxies.' : next === 'office' ? 'Theme: office.' : 'Theme: none.' }
+    }
+    if (arg === 'settings') {
+      await goTab($, 'settings')
+      await open($)
+      return { text: 'Settings tab opened.' }
     }
     if (arg === 'legend') {
       await goTab($, 'legend')
@@ -522,8 +567,11 @@ export const register: Register = on => {
     const room = active.find(r => r.key === v.room)
     const shown = room ? [room] : active
     const quiet = o.rooms.length - active.length
-    const isGalaxy = v.theme !== 'office'
-    const scene = Svg && shown.length > 0 ? (isGalaxy ? steadyGalaxy(galaxySvg(shown, now, v.selected)) : steadyFloor(floorSvg(shown, now, v.selected))) : undefined
+    const theme: ThemeChoice = v.theme ?? 'galaxy'
+    const isGalaxy = theme === 'galaxy'
+    // no picture asked for: the lists stand alone
+    const isDrawn = theme !== 'none'
+    const scene = Svg && isDrawn && shown.length > 0 ? (isGalaxy ? steadyGalaxy(galaxySvg(shown, now, v.selected)) : steadyFloor(floorSvg(shown, now, v.selected))) : undefined
     const count = (k: Worker['kind']) => shown.reduce((n, r) => n + r.workers.filter(w => w.kind === k).length, 0)
 
     const ds = await read($, detail)
@@ -720,8 +768,8 @@ export const register: Register = on => {
       )
     }
 
-    // the tabs: the picture with its lists, and the legend that explains every state
-    const tab = v.tab === 'legend' ? 'legend' : 'main'
+    // the tabs: the picture with its lists, the legend that explains every state, and the settings
+    const tab = v.tab === 'legend' || v.tab === 'settings' ? v.tab : 'main'
     const tabs = (
       <Box flexDirection="row" gap={1}>
         <Button key="tab-main" variant={tab === 'main' ? 'primary' : 'secondary'} onPress={() => void goTab($, 'main')}>
@@ -730,15 +778,43 @@ export const register: Register = on => {
         <Button key="tab-legend" variant={tab === 'legend' ? 'primary' : 'secondary'} onPress={() => void goTab($, 'legend')}>
           Легенда
         </Button>
+        <Button key="tab-settings" variant={tab === 'settings' ? 'primary' : 'secondary'} onPress={() => void goTab($, 'settings')}>
+          Налаштування
+        </Button>
       </Box>
     )
+
+    if (tab === 'settings') {
+      return (
+        <Box flexDirection="column" gap={1}>
+          {tabs}
+          <Text bold>Тема</Text>
+          <Text dimColor>Як показувати сесії. Вибір записується у файл iso-office.json у теці Claude і діє й після перезапуску.</Text>
+          {THEMES.map(t => (
+            <Box flexDirection="column">
+              <Button key={`theme-${t.key}`} variant={theme === t.key ? 'primary' : 'secondary'} onPress={() => void setTheme($, t.key)}>
+                {theme === t.key ? `✓ ${t.title}` : t.title}
+              </Button>
+              <Box paddingLeft={2}>
+                <Text dimColor>{t.hint}</Text>
+              </Box>
+            </Box>
+          ))}
+          {v.note && <Text color="red">{v.note}</Text>}
+        </Box>
+      )
+    }
 
     if (tab === 'legend') {
       const L = legend(isGalaxy ? 'galaxy' : 'office')
       return (
         <Box flexDirection="column" gap={1}>
           {tabs}
-          <Text dimColor>{`Стани сесій і як їх видно ${isGalaxy ? 'в галактиках' : 'в офісі'}. /office theme перемикає вигляд.`}</Text>
+          <Text dimColor>
+            {isDrawn
+              ? `Стани сесій і як їх видно ${isGalaxy ? 'в галактиках' : 'в офісі'}. Вигляд обирають на вкладці «Налаштування».`
+              : 'Стани сесій. Графіку вимкнено: стан видно лише в списках. Вигляд обирають на вкладці «Налаштування».'}
+          </Text>
           {L.states.map(s => (
             <Box flexDirection="row" gap={1}>
               <Box width={2}>
@@ -749,19 +825,20 @@ export const register: Register = on => {
                   {s.title}
                 </Text>
                 <Text>{s.means}</Text>
-                <Text dimColor>{s.looks}</Text>
+                {isDrawn && <Text dimColor>{s.looks}</Text>}
               </Box>
             </Box>
           ))}
-          <Text bold>Позначки</Text>
-          {L.marks.map(mk => (
-            <Box flexDirection="column">
-              <Text>{mk.name}</Text>
-              <Box paddingLeft={2}>
-                <Text dimColor>{mk.text}</Text>
+          {isDrawn && <Text bold>Позначки</Text>}
+          {isDrawn &&
+            L.marks.map(mk => (
+              <Box flexDirection="column">
+                <Text>{mk.name}</Text>
+                <Box paddingLeft={2}>
+                  <Text dimColor>{mk.text}</Text>
+                </Box>
               </Box>
-            </Box>
-          ))}
+            ))}
         </Box>
       )
     }
@@ -813,6 +890,11 @@ export const register: Register = on => {
             </Box>
             {scene.hiddenRooms > 0 && <Text dimColor>Ще {isGalaxy ? 'галактик' : 'кімнат'} не показано: {scene.hiddenRooms}</Text>}
             {!room && quiet > 0 && <Text dimColor>Проєктів без активності (усі сесії вдома): {quiet}</Text>}
+            {lists}
+          </Box>
+        ) : Svg && !isDrawn ? (
+          // no picture asked for: the lists alone
+          <Box flexDirection="column" gap={1}>
             {lists}
           </Box>
         ) : (

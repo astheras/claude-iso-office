@@ -71,6 +71,9 @@ let refuseOpen = false
 let asking: 'AskUserQuestion' | 'ExitPlanMode' | undefined
 let configDir: string | undefined
 const listed: string[] = []
+// the file of settings as it lies on disk (undefined: there is none), and what was written to it
+let settingsFile: string | undefined
+const written: { path: string; text: string }[] = []
 // the engine gives paths with its own separators: compared with forward slashes
 const slashed = (paths: string[]) => [...new Set(paths.map(d => d.split(String.fromCharCode(92)).join('/')))]
 
@@ -144,7 +147,18 @@ const engine = ($: any, on: any) => {
     listed.push(String(e.path))
     return { value: [{ name: '1.json', kind: 'file' }, { name: '1.key', kind: 'file' }] }
   })
-  on('fs.read', () => ({ value: JSON.stringify({ status: 'waiting', hostSessionId: 'b', statusUpdatedAt: Date.now() - 7 * 60000 }) }))
+  on('fs.read', (_: unknown, e: any) => {
+    if (String(e.path).endsWith('iso-office.json')) {
+      if (settingsFile === undefined) throw new Error('ENOENT')
+      return { value: settingsFile }
+    }
+    return { value: JSON.stringify({ status: 'waiting', hostSessionId: 'b', statusUpdatedAt: Date.now() - 7 * 60000 }) }
+  })
+  on('fs.write', (_: unknown, e: any) => {
+    written.push({ path: String(e.path), text: String(e.text) })
+    settingsFile = String(e.text)
+    return { value: undefined }
+  })
   // like the app: list_sessions leaves out the session that asks; get_session answers for it
   on('mcp.call', (_: unknown, e: any) => {
     if (e.tool === 'list_sessions') polls++
@@ -167,7 +181,9 @@ const engine = ($: any, on: any) => {
 }
 
 // the pane as it opens: in the galaxies
-const startedFresh = async ($: any, on: any) => {
+const startedFresh = async ($: any, on: any, file?: string) => {
+  settingsFile = file
+  written.length = 0
   engine($, on)
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
   await new Promise(r => (globalThis as any).setTimeout(r, 100))
@@ -368,7 +384,7 @@ test('/office theme switches between the office and the galaxies, and says which
   expect(await ui.find({ type: 'Svg' })).toBeDefined()
 
   // a name to the theme, and a wrong one is told off and changes nothing
-  expect((await $.command.run({ command: 'office', args: 'theme sky' })).text).toMatch(/Themes: office, galaxy/)
+  expect((await $.command.run({ command: 'office', args: 'theme sky' })).text).toMatch(/Themes: none, office, galaxy/)
   expect((await $.command.run({ command: 'office', args: 'theme galaxy' })).text).toBe('Theme: galaxies.')
   expect((await $.command.run({ command: 'office', args: 'theme office' })).text).toBe('Theme: office.')
   await new Promise(r => (globalThis as any).setTimeout(r, 200))
@@ -669,4 +685,102 @@ test('with no CLAUDE_CONFIG_DIR the registry is in the .claude of the home folde
   await new Promise(r => (globalThis as any).setTimeout(r, 300))
   expect(listed.length).toBeGreaterThan(0)
   expect(slashed(listed)).toEqual(['C:/Users/x/.claude/sessions'])
+})
+
+test('the «Налаштування» tab offers three themes, marks the one in use, and each choice is written to the file', async ($, on) => {
+  await startedFresh($, on)
+  await new Promise(r => (globalThis as any).setTimeout(r, 300))
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+
+  // the third tab, beside the legend; the picture is still the first
+  expect(await ui.find({ type: 'Button', text: /^Налаштування$/ })).toBeDefined()
+  expect(await ui.find({ type: 'Svg' })).toBeDefined()
+
+  await ui.press({ key: 'tab-settings' })
+  await new Promise(r => (globalThis as any).setTimeout(r, 200))
+  expect(await ui.find({ type: 'Svg' })).toBeUndefined()
+  expect(await ui.find({ type: 'Button', text: /^Відсутня$/ })).toBeDefined()
+  expect(await ui.find({ type: 'Button', text: /^Офіс$/ })).toBeDefined()
+  // the galaxies are the default
+  expect(await ui.find({ type: 'Button', text: /^✓ Галактика$/ })).toBeDefined()
+  expect(written).toEqual([])
+
+  await ui.press({ key: 'theme-office' })
+  await new Promise(r => (globalThis as any).setTimeout(r, 200))
+  expect(await ui.find({ type: 'Button', text: /^✓ Офіс$/ })).toBeDefined()
+  expect(slashed(written.map(w => w.path))).toEqual(['C:/Users/x/.claude/iso-office.json'])
+  expect(JSON.parse(written[written.length - 1].text)).toEqual({ theme: 'office' })
+
+  await ui.press({ key: 'tab-main' })
+  await new Promise(r => (globalThis as any).setTimeout(r, 200))
+  expect(String(((await ui.find({ type: 'Svg' })) as any).props.source)).toContain('<use href="#se')
+  await ui.unmount()
+})
+
+// the drawing of the work itself: the icons beside the names are drawings too, and are not it
+const hasScene = async (ui: any) => (await ui.findAll({ type: 'Svg' })).some((x: any) => /^(Галактики|Офіс): /.test(String(x.props.alt)))
+
+test('the theme «Відсутня» draws no picture: the lists stand alone, and the legend tells only the states', async ($, on) => {
+  await startedFresh($, on)
+  await new Promise(r => (globalThis as any).setTimeout(r, 300))
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+
+  await ui.press({ key: 'tab-settings' })
+  await ui.press({ key: 'theme-none' })
+  await new Promise(r => (globalThis as any).setTimeout(r, 200))
+  expect(JSON.parse(written[written.length - 1].text)).toEqual({ theme: 'none' })
+
+  await ui.press({ key: 'tab-main' })
+  await new Promise(r => (globalThis as any).setTimeout(r, 200))
+  expect(await hasScene(ui)).toBe(false)
+  // the lists are there, and a chat in one opens as before
+  expect(await ui.find({ type: 'Text', text: /^Потребують відповіді · 1$/ })).toBeDefined()
+  await ui.press({ key: 'pick-a' })
+  await new Promise(r => (globalThis as any).setTimeout(r, 200))
+  expect(await ui.find({ type: 'Text', text: /Вартість/ })).toBeDefined()
+
+  await ui.press({ key: 'tab-legend' })
+  await new Promise(r => (globalThis as any).setTimeout(r, 200))
+  expect(await ui.find({ type: 'Text', text: 'У роботі' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^Позначки$/ })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: /Червона зірка/ })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('/office theme none and /office settings; a bare /office theme leaves «none» for the galaxies', async ($, on) => {
+  await startedFresh($, on)
+  expect((await $.command.run({ command: 'office', args: 'theme none' })).text).toBe('Theme: none.')
+  expect(JSON.parse(written[written.length - 1].text)).toEqual({ theme: 'none' })
+  expect((await $.command.run({ command: 'office', args: 'theme' })).text).toBe('Theme: galaxies.')
+  expect((await $.command.run({ command: 'office', args: 'settings' })).text).toBe('Settings tab opened.')
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect(await ui.find({ type: 'Button', text: /^✓ Галактика$/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('the saved theme is read at the start', async ($, on) => {
+  await startedFresh($, on, JSON.stringify({ theme: 'office' }))
+  await new Promise(r => (globalThis as any).setTimeout(r, 300))
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect(String(((await ui.find({ type: 'Svg' })) as any).props.source)).toContain('<use href="#se')
+  await ui.unmount()
+})
+
+test('a spoiled settings file leaves the galaxies', async ($, on) => {
+  await startedFresh($, on, 'this is not json')
+  await new Promise(r => (globalThis as any).setTimeout(r, 300))
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect(String(((await ui.find({ type: 'Svg' })) as any).props.source)).toContain('id="milky"')
+  await ui.unmount()
+})
+
+test('the settings file is kept in the folder CLAUDE_CONFIG_DIR names', async ($, on) => {
+  configDir = 'D:/Claude/.claude'
+  try {
+    await startedFresh($, on)
+    await $.command.run({ command: 'office', args: 'theme none' })
+    expect(slashed(written.map(w => w.path))).toEqual(['D:/Claude/.claude/iso-office.json'])
+  } finally {
+    configDir = undefined
+  }
 })

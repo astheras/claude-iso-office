@@ -221,11 +221,14 @@ export type View = {
   note: string
   /** show the click areas as blocks, to check they sit on the figures */
   debug: boolean
-  /** how the work is drawn: the isometric office (the default) or the galaxies */
-  theme?: 'office' | 'galaxy'
-  /** the pane's tab: the picture with its lists (the default), or the legend that explains every state */
-  tab?: 'main' | 'legend'
+  /** how the work is drawn: the galaxies (the default), the isometric office, or nothing (the lists alone) */
+  theme?: ThemeChoice
+  /** the pane's tab: the picture with its lists (the default), the legend that explains every state, or the settings */
+  tab?: 'main' | 'legend' | 'settings'
 }
+
+/** What the person may choose to see: no picture at all, the isometric office, or the galaxies. */
+export type ThemeChoice = 'none' | 'office' | 'galaxy'
 
 export type Office = {
   at: number
