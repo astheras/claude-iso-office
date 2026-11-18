@@ -1,4 +1,5 @@
 import type { BgTask, Decision, Detail, McpWait, Room, TurnAsk, Worker } from '../types'
+import { agentRows, agentsScriptLines, parseAgents } from './agents'
 import { agoText, groupKeyOf, WORD } from './data'
 import { errorLabel } from './errors'
 import { CLAUDE_DIR_PS, transcriptGlobPs } from './paths'
@@ -58,7 +59,7 @@ export function detailScript(sessionId: string): string {
     '[Console]::OutputEncoding = [Text.Encoding]::UTF8',
     `$id = '${sessionId}'`,
     '$q = [char]34',
-    '$res = @{ meta = $null; cost = $null; plan = $null }',
+    '$res = @{ meta = $null; cost = $null; plan = $null; agents = $null }',
     CLAUDE_DIR_PS,
     "$mp = $env:LOCALAPPDATA + '\\Claude-Data\\*\\claude-code-sessions\\*\\*\\' + $id + '.json'",
     '$m = Get-ChildItem -Path $mp -File | Select-Object -First 1',
@@ -75,16 +76,19 @@ export function detailScript(sessionId: string): string {
     // the task-list calls: the chat's own messages are short lines; the long ones are copies of what went to the model
     "    $pp = @(($q + 'name' + $q + ':' + $q + 'mcp__ccd_turn__update_plan' + $q), ($q + 'name' + $q + ':' + $q + 'mcp__ccd_turn__wrap_up' + $q))",
     '    $res.plan = @(Select-String -LiteralPath $t.FullName -Pattern $pp -SimpleMatch | Where-Object { $_.Line.Length -lt 60000 } | Select-Object -Last 150 | ForEach-Object { $_.Line })',
+    // the helper agents the chat started in its turns: they lie in a folder beside the transcript
+    ...agentsScriptLines(),
     '  }',
     '}',
-    'ConvertTo-Json -InputObject $res -Compress',
+    // the helpers are a list of tables inside a table: deeper than the default two levels
+    'ConvertTo-Json -InputObject $res -Compress -Depth 5',
   ].join('\n')
 }
 
 /** What detailScript printed, as far as it is readable; anything else is an empty answer, never an error. */
 export function parseDetail(stdout: string): Detail {
   const out: Detail = {}
-  let top: { meta?: Record<string, unknown> | null; cost?: unknown; plan?: unknown }
+  let top: { meta?: Record<string, unknown> | null; cost?: unknown; plan?: unknown; agents?: unknown }
   try {
     top = JSON.parse(stdout)
   } catch {
@@ -138,6 +142,8 @@ export function parseDetail(stdout: string): Detail {
   const lines = typeof top.plan === 'string' ? [top.plan] : Array.isArray(top.plan) ? top.plan.filter(x => typeof x === 'string') : []
   const plan = planFrom(lines)
   if (plan) out.plan = plan
+  const agents = parseAgents(top.agents)
+  if (agents) out.agents = agents
   return out
 }
 
@@ -167,6 +173,8 @@ export function detailRows(w: Worker, room: Room, d: Detail | undefined, now: nu
     add('План', `${done} з ${total}`)
     for (const p of d.plan) add(PLAN_MARK[p.status], p.text)
   }
+  // the helper agents it has delegated to: what each was given, the model it runs on, and what it is doing
+  if (d?.agents) for (const [label, value] of agentRows(d.agents, now)) rows.push([label, value])
   if (d) {
     if (d.costUSD !== undefined) add('Вартість', `${d.costPartial ? '≥ ' : ''}${dollars(d.costUSD)}`)
     if (d.tokens) {

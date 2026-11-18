@@ -2,6 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, Timer } from 'claude-code'
 
 import type { Detail, DetailState, ErrorCache, Memory, Office, RawSession, Room, SketchCache, ThemeChoice, View, Worker } from '../types'
+import { hasLiveAgent } from './agents'
 import { ack, ago, agoText, byProject, classify, emptyMemory, GROUP_COLOR, GROUP_MARK, groupSessions, parseSessions, RED, summary, WORD } from './data'
 import type { Group } from './data'
 import { askText, decisionText, detailRows, detailScript, mcpName, parseDetail, tasksText, waitsText } from './detail'
@@ -52,6 +53,8 @@ const sketches = atom({ plugin: 'iso-office', key: 'sketches' } as const, {} as 
 
 // the open chat's details are fetched again when older than this (cost moves at the end of each turn)
 const DETAIL_TTL_MS = 30000
+// ...and sooner while one of its helper agents is at work, so that «what it is doing» is not half a minute late
+const LIVE_DETAIL_TTL_MS = 8000
 
 // a poll that has not answered in this long is taken for lost, so one hung call cannot stop the office for good
 const STUCK_MS = 20000
@@ -280,7 +283,8 @@ async function poll($: EngineInterface) {
     const chosenId = (await read($, view)).selected
     if (chosenId) {
       const held = await read($, detail)
-      if (held.id !== chosenId || Date.now() - (detailFetchedAt.get(chosenId) ?? 0) > DETAIL_TTL_MS) void loadDetail($, chosenId)
+      const ttl = held.id === chosenId && hasLiveAgent(held.data?.agents, Date.now()) ? LIVE_DETAIL_TTL_MS : DETAIL_TTL_MS
+      if (held.id !== chosenId || Date.now() - (detailFetchedAt.get(chosenId) ?? 0) > ttl) void loadDetail($, chosenId)
     }
 
     // no toast for the chat the person is in: its answer is in front of them

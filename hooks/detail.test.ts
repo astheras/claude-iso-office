@@ -110,6 +110,61 @@ test('a cost with an unpriced model is shown as a lower bound', () => {
   expect(Object.fromEntries(detailRows(worker(), room, parseDetail(partial), NOW))['Вартість']).toBe('≥ $1.00')
 })
 
+// what the script printed for a chat that has delegated: a helper at work and one that is over (shortened)
+const WITH_AGENTS = JSON.stringify({
+  meta: { model: 'claude-sonnet-5-5' },
+  agents: [
+    {
+      meta: JSON.stringify({ agentType: 'Explore', description: 'Find the callers', toolUseId: 'toolu_1', spawnDepth: 1, model: 'haiku' }),
+      at: NOW - 3000,
+      model: 'claude-haiku-5-5',
+      tool: JSON.stringify({ message: { content: [{ type: 'tool_use', name: 'Grep', input: { pattern: 'startedBy' } }] } }),
+    },
+    {
+      meta: JSON.stringify({ agentType: 'general-purpose', description: 'Triage failures', toolUseId: 'toolu_2', spawnDepth: 1, finished: true }),
+      at: NOW - 20 * MIN,
+      model: 'claude-opus-5-5',
+      tool: null,
+    },
+  ],
+})
+
+test('the helpers a chat has delegated to are read from the script answer and kept in the details', () => {
+  const d = parseDetail(WITH_AGENTS)
+  expect(d.agents?.map(a => [a.type, a.model, a.done])).toEqual([
+    ['Explore', 'claude-haiku-5-5', false],
+    ['general-purpose', 'claude-opus-5-5', true],
+  ])
+  expect(d.agents![0]!.doing).toBe('Grep startedBy')
+  // no helpers: no field, and the rest of the answer is read as before
+  expect(parseDetail(JSON.stringify({ meta: { model: 'm' }, agents: [] }))).toEqual({ model: 'm' })
+  expect(parseDetail(JSON.stringify({ meta: { model: 'm' }, agents: null }))).toEqual({ model: 'm' })
+})
+
+test('the accordion names each helper with its model and what it is doing, after the plan and before the cost', () => {
+  const d = { ...parseDetail(WITH_AGENTS), plan: [{ text: 'step', status: 'in_progress' as const }], costUSD: 1 }
+  const rows = detailRows(worker(), room, d, NOW)
+  const labels = rows.map(r => r[0])
+  expect(labels.indexOf('Субагенти')).toBeGreaterThan(labels.indexOf('План'))
+  expect(labels.indexOf('Субагенти')).toBeLessThan(labels.indexOf('Вартість'))
+  const values = rows.map(r => r[1])
+  expect(values).toContain('1 працює · 1 завершено')
+  expect(values).toContain('Explore · claude-haiku-5-5 · Find the callers')
+  expect(values).toContain('зараз: Grep startedBy')
+  expect(values).toContain('general-purpose · claude-opus-5-5 · Triage failures · 20 хв тому')
+})
+
+test('a chat with no helpers has no helper rows', () => {
+  expect(detailRows(worker(), room, parseDetail(REAL), NOW).some(r => r[0] === 'Субагенти')).toBe(false)
+})
+
+test('the script reads the helpers beside the transcript, and asks the answer for depth enough to hold them', () => {
+  const script = detailScript('local_abc')
+  expect(script).toContain('subagents')
+  expect(script).toContain('$res.agents')
+  expect(script).toContain('ConvertTo-Json -InputObject $res -Compress -Depth 5')
+})
+
 test('the disk-read script holds no double quote and takes only a plain id', () => {
   const script = detailScript('local_d1caa14d-5954-4412-b41b-abd8ecc01f6a')
   expect(script).toContain("'local_d1caa14d-5954-4412-b41b-abd8ecc01f6a'")

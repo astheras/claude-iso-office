@@ -172,10 +172,38 @@ export type Sketch = {
 
 export type SketchCache = Record<string, Sketch>
 
+/**
+ * A helper agent a chat started inside a turn (the `Agent` tool), read from the files Claude keeps beside the chat's transcript:
+ * `<chat>/subagents/agent-*.meta.json` (the type, the task, whether it is over) and the tail of `agent-*.jsonl` (the model
+ * it ran on, the call it is in the middle of). Not the same as a chat started from another chat, which is a session of its own.
+ */
+export type Subagent = {
+  /** the id of the `Agent` call that started it */
+  id: string
+  /** its kind: Explore, Plan, general-purpose, or a custom agent's name */
+  type: string
+  /** the task it was given, in the few words the caller put in `description` */
+  what?: string
+  /** the model it really ran on, as its own transcript says; absent while that is not known */
+  model?: string
+  /** the model the caller asked for, as written («haiku»); absent when it let the agent pick */
+  asked?: string
+  /** its record says it is over */
+  done: boolean
+  /** when its transcript was last written to (ms): how long it has been quiet, or when it ended */
+  at?: number
+  /** the call it is in the middle of, as one short line («Read galaxy.ts»); only for one that is not over */
+  doing?: string
+  /** 1 for one the chat started itself, more for one that another helper started */
+  depth?: number
+}
+
 /** What the accordion of a chosen chat shows; every field is optional, a missing one is left out of the rows. */
 export type Detail = {
   /** the chat's task list as it stands now, read from its transcript */
   plan?: PlanItem[]
+  /** the helper agents it has started, the ones still going first */
+  agents?: Subagent[]
   model?: string
   effort?: string
   permissionMode?: string
