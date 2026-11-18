@@ -710,7 +710,8 @@ export const register: Register = on => {
               <Box position="absolute" top={0} left={0}>
                 <Svg source={currentSvg(slotPx, lines * ROW_PX)} alt="Поточна сесія" width={slotPx} height={Math.round(lines * ROW_PX)} />
               </Box>
-              {head}
+              {/* the text is off the bar at the band's left edge */}
+              <Box paddingLeft={1}>{head}</Box>
             </Box>
           ) : (
             head
