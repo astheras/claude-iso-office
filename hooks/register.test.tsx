@@ -507,6 +507,20 @@ test('an idle session is in no list, but pressing it in the picture opens its da
   await ui.unmount()
 })
 
+test('the session the pane is open in has a band of grey fading out behind its row in the list, and no other has one', async ($, on) => {
+  await started($, on)
+  await new Promise(r => (globalThis as any).setTimeout(r, 300))
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  await new Promise(r => (globalThis as any).setTimeout(r, 200))
+
+  expect(await ui.find({ type: 'Button', text: /This chat/ })).toBeDefined()
+  // one band: the other sessions have none
+  const bands = (await ui.findAll({ type: 'Svg' })).filter((x: any) => x.props.alt === 'Поточна сесія')
+  expect(bands).toHaveLength(1)
+  expect(bands[0].props.source).toContain('linearGradient')
+  await ui.unmount()
+})
+
 test('the «+» by a project opens a new session in its folder through the app\'s link, in both themes', async ($, on) => {
   await started($, on)
   await new Promise(r => (globalThis as any).setTimeout(r, 300))

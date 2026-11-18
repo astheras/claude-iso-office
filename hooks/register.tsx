@@ -5,6 +5,7 @@ import type { Detail, DetailState, ErrorCache, Memory, Office, RawSession, Room,
 import { ack, ago, agoText, byProject, classify, emptyMemory, GROUP_COLOR, GROUP_MARK, groupSessions, parseSessions, RED, summary, WORD } from './data'
 import type { Group } from './data'
 import { askText, decisionText, detailRows, detailScript, mcpName, parseDetail, tasksText, waitsText } from './detail'
+import { currentSvg } from './current'
 import { errorLabel, errorOf, errorsScript, needsCheck, nextCache, parseErrors, parsePeers, peerOf, waitOf } from './errors'
 import { floorSvg } from './floor'
 import { galaxySvg, REST_COLOR, steady } from './galaxy'
@@ -575,6 +576,13 @@ export const register: Register = on => {
     const count = (k: Worker['kind']) => shown.reduce((n, r) => n + r.workers.filter(w => w.kind === k).length, 0)
 
     const ds = await read($, detail)
+    // the session this pane is open in: its row in the lists has a band behind it
+    const me = await ownId($)
+
+    // cells per scene px; the drawing is as wide as the pane
+    const cols = (e.props.bodyColumns ?? 76) + EXTRA_COLS
+    const slotPx = Math.round(cols * CELL_PX)
+    const ROW_PX = CELL_PX * ROW_RATIO
 
     // an icon with a tooltip: a drawing carries the <title>, a clear Button over it takes the press; no drawing (the
     // terminal): a plain glyph
@@ -639,7 +647,17 @@ export const register: Register = on => {
     const groups = groupSessions(shown)
     const item = (g: { key: keyof typeof GROUP_MARK; color: string }, { w, room: r }: Group['items'][number]) => {
       const isOpen = w.id === v.selected
-      return (
+      const isMe = w.id === me
+      // the lines the row takes (the title, the line under it, and each note), which the band behind it is as tall as
+      const lines =
+        2 +
+        (isOpen ? 0.4 : 0) +
+        (w.decision && !w.error ? 1 : 0) +
+        (w.turnAsk && g.key === 'turn' ? 1 : 0) +
+        (waitsText(w) && !w.error && !w.needsAnswer ? 1 : 0) +
+        (w.mcp && !w.needsAnswer ? 1 : 0) +
+        (w.tasks?.length && !w.error && !w.needsAnswer ? 1 : 0)
+      const head = (
         <Box flexDirection="column">
           <Button key={`pick-${w.id}`} plain onPress={() => void pick($, w.id)}>
             <Text color={g.color}>{GROUP_MARK[g.key]}</Text>
@@ -683,12 +701,28 @@ export const register: Register = on => {
               <Text color={GROUP_COLOR.task}>{`чекає фонову задачу: ${tasksText(w)}`}</Text>
             </Box>
           )}
+        </Box>
+      )
+      return (
+        <Box flexDirection="column">
+          {Svg && isMe ? (
+            <Box position="relative">
+              <Box position="absolute" top={0} left={0}>
+                <Svg source={currentSvg(slotPx, lines * ROW_PX)} alt="Поточна сесія" width={slotPx} height={Math.round(lines * ROW_PX)} />
+              </Box>
+              {head}
+            </Box>
+          ) : (
+            head
+          )}
           {isOpen && accordion(w, r)}
         </Box>
       )
     }
     const inLists = new Set(groups.flatMap(g => g.items.map(x => x.w.id)))
-    const chosenIdle = shown.flatMap(r => r.workers.map(w => ({ w, room: r }))).find(x => x.w.id === v.selected && !inLists.has(x.w.id))
+    // an idle session is in no list: the chosen one and the current one (this pane's own) are still shown, so that they can be found
+    const idleShown = shown.flatMap(r => r.workers.map(w => ({ w, room: r }))).filter(x => (x.w.id === v.selected || x.w.id === me) && !inLists.has(x.w.id))
+    const idleTitle = idleShown.some(x => x.w.id === me) ? (idleShown.some(x => x.w.id === v.selected && x.w.id !== me) ? 'Простоюють · поточна й обрана' : 'Простоює · поточна') : 'Простоює · обрана'
     const lists = (
       <Box flexDirection="column" gap={1}>
         {groups.map(g => (
@@ -705,22 +739,19 @@ export const register: Register = on => {
           </Box>
         ))}
         {/* a session that merely idles is in no list, yet it can be pressed in the picture: its data open here */}
-        {chosenIdle && (
+        {idleShown.length > 0 && (
           <Box flexDirection="column">
             <Text bold color={REST_COLOR}>
-              Простоює · обрана
+              {idleTitle}
             </Text>
-            {item({ key: 'rest', color: REST_COLOR }, chosenIdle)}
+            {idleShown.map(x => item({ key: 'rest', color: REST_COLOR }, x))}
           </Box>
         )}
-        {groups.length === 0 && !chosenIdle && <Text dimColor>Немає сесій у роботі чи тих, що чекають.</Text>}
+        {groups.length === 0 && idleShown.length === 0 &&<Text dimColor>Немає сесій у роботі чи тих, що чекають.</Text>}
       </Box>
     )
 
-    // cells per scene px; the drawing is as wide as the pane
-    const cols = (e.props.bodyColumns ?? 76) + EXTRA_COLS
     const k = scene ? cols / scene.width : 0
-    const slotPx = Math.round(cols * CELL_PX)
     const slotH = scene ? Math.round((slotPx * scene.height) / scene.width) : 0
     const cellX = (x: number) => Math.max(0, Math.round(x * k))
     const cellY = (y: number) => Math.max(0, Math.round((y * k) / ROW_RATIO))
