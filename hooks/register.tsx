@@ -657,6 +657,8 @@ export const register: Register = on => {
         (waitsText(w) && !w.error && !w.needsAnswer ? 1 : 0) +
         (w.mcp && !w.needsAnswer ? 1 : 0) +
         (w.tasks?.length && !w.error && !w.needsAnswer ? 1 : 0)
+      // whole rows, since the row is drawn up over the band by a margin of that many rows
+      const bandRows = Math.max(1, Math.round(lines))
       const head = (
         <Box flexDirection="column">
           <Button key={`pick-${w.id}`} plain onPress={() => void pick($, w.id)}>
@@ -706,12 +708,15 @@ export const register: Register = on => {
       return (
         <Box flexDirection="column">
           {Svg && isMe ? (
-            <Box position="relative">
-              <Box position="absolute" top={0} left={0}>
-                <Svg source={currentSvg(slotPx, lines * ROW_PX)} alt="Поточна сесія" width={slotPx} height={Math.round(lines * ROW_PX)} />
-              </Box>
+            // The band is an ordinary drawing in the flow, and the row is drawn up over it with a negative margin. It must
+            // not be an absolute box laid over the row: that took the pointer from the buttons (no hover, no press on the
+            // current session's title). A row taller than the estimate just grows the box; a shorter one leaves a small gap.
+            <Box flexDirection="column">
+              <Svg source={currentSvg(slotPx, bandRows * ROW_PX)} alt="Поточна сесія" width={slotPx} height={Math.round(bandRows * ROW_PX)} />
               {/* the text is off the bar at the band's left edge */}
-              <Box paddingLeft={1}>{head}</Box>
+              <Box marginTop={-bandRows} paddingLeft={1}>
+                {head}
+              </Box>
             </Box>
           ) : (
             head

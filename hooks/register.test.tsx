@@ -521,6 +521,22 @@ test('the session the pane is open in has a band of grey fading out behind its r
   await ui.unmount()
 })
 
+test('the row of the current session, which has a band behind it, still opens its details when pressed', async ($, on) => {
+  await started($, on)
+  await new Promise(r => (globalThis as any).setTimeout(r, 300))
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  await new Promise(r => (globalThis as any).setTimeout(r, 200))
+
+  expect(await ui.find({ type: 'Text', text: /Вартість/ })).toBeUndefined()
+  await ui.press({ key: 'pick-me' })
+  await new Promise(r => (globalThis as any).setTimeout(r, 300))
+  expect(await ui.find({ type: 'Text', text: /Вартість/ })).toBeDefined()
+  // the band is still drawn (the mock cannot tell which box lies over which: that part is checked in the app)
+  const svgs = (await ui.findAll({ type: 'Svg' })).filter((x: any) => x.props.alt === 'Поточна сесія')
+  expect(svgs).toHaveLength(1)
+  await ui.unmount()
+})
+
 test('the «+» by a project opens a new session in its folder through the app\'s link, in both themes', async ($, on) => {
   await started($, on)
   await new Promise(r => (globalThis as any).setTimeout(r, 300))
