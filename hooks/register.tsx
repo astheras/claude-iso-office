@@ -14,7 +14,7 @@ import { legend } from './legend'
 import { claudeDir } from './paths'
 import { planProgress } from './plan'
 import { DEFAULT_SETTINGS, parseSettings, serializeSettings, settingsPath, THEMES } from './settings'
-import { needsSketch, nextSketches, parseSketches, sketchLook, sketchScript, withSketches } from './sketch'
+import { needsSketch, nextSketches, parseSketches, sketchLook, sketchOffset, sketchScript, withSketches } from './sketch'
 import type { Label, Spot } from './floor'
 import { ICON_H, ICON_W, iconSvg } from './icons'
 import { tipSvg } from './tip'
@@ -215,7 +215,7 @@ async function refreshSketches($: EngineInterface, listed: RawSession[], cache: 
     if (todo.length > 0) {
       for (const s of todo) sketchReadAt.set(s.sessionId, now)
       try {
-        const items = todo.map(s => ({ id: s.sessionId, offset: cache[s.sessionId]?.offset ?? 0 }))
+        const items = todo.map(s => ({ id: s.sessionId, offset: sketchOffset(cache[s.sessionId]) }))
         const r = await $.process.run(['powershell', '-NoProfile', '-NonInteractive', '-Command', sketchScript(items)], { timeoutMs: 40000 })
         if (r.exitCode === 0) found = parseSketches(r.stdout)
       } catch {

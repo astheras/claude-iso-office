@@ -1,12 +1,13 @@
 import type { BgTask } from '../types'
 
 /**
- * What a chat has started in the background and has not been told is over: a command run with `run_in_background`, or a
- * Monitor that watches for something. The chat's turn ends while they go on, so the app calls it stopped; but it is
- * waiting for them, and the transcript says so. A task begins with a call (its description is there), the answer to the
- * call names it («Command running in background with ID: …», «Monitor started (task …»), and a notice ends it: a record
- * with `<task-notification>` that has a status («completed»), or says the monitor expired. A notice with no status is one
- * more event of a monitor that goes on.
+ * What a chat has started in the background and has not been told is over: a command run with `run_in_background`, a
+ * Monitor that watches for something, or a helper agent run with `run_in_background`. The chat's turn ends while they go
+ * on, so the app calls it stopped; but it is waiting for them, and the transcript says so. A task begins with a call (its
+ * description is there), the answer to the call names it («Command running in background with ID: …», «Monitor started
+ * (task …», «Async agent launched successfully … agentId: …»), and a notice ends it: a record with `<task-notification>`
+ * that has a status («completed»), or says the monitor expired. A notice with no status is one more event of a monitor
+ * that goes on. The notice of an agent names it by the same id its answer gave.
  */
 
 /** A task left open this long is taken for lost (the chat was restarted, the notice never came). */
@@ -14,6 +15,7 @@ export const MAX_TASK_MS = 12 * 3600_000
 
 const COMMAND = /running in background with ID: ([A-Za-z0-9_-]+)/
 const MONITOR = /Monitor started \(task ([A-Za-z0-9_-]+)/
+const AGENT = /Async agent launched successfully[\s\S]*?agentId: ([A-Za-z0-9_-]+)/
 
 type Block = Record<string, unknown>
 
@@ -53,12 +55,14 @@ export function tasksFrom(lines: string[], held: BgTask[] = []): BgTask[] {
         }
         if (b.name !== 'Monitor' && input.run_in_background !== true) continue
         const what = String(input.description ?? input.command ?? b.name).replace(/\s+/g, ' ').trim().slice(0, 120)
+        const kind = b.name === 'Monitor' ? 'monitor' : b.name === 'Agent' ? 'agent' : 'bash'
         starts.set(String(b.id ?? ''), {
-          kind: b.name === 'Monitor' ? 'monitor' : 'bash',
+          kind,
           what,
           ...(Number.isFinite(at) ? { at } : {}),
-          // a command that goes to an MCP server through a script says so in its description or its text
-          ...(/mcp/i.test(JSON.stringify(input)) ? { mcp: true } : {}),
+          // a command that goes to an MCP server through a script says so in its description or its text; the prompt of an
+          // agent is free text that may only mention MCP, so it does not count
+          ...(kind !== 'agent' && /mcp/i.test(JSON.stringify(input)) ? { mcp: true } : {}),
         })
       }
     } else if (rec.type === 'user' && Array.isArray(content)) {
@@ -67,7 +71,7 @@ export function tasksFrom(lines: string[], held: BgTask[] = []): BgTask[] {
         const start = starts.get(String(b.tool_use_id ?? ''))
         if (!start) continue
         const text = textOf(b.content)
-        const id = COMMAND.exec(text)?.[1] ?? MONITOR.exec(text)?.[1]
+        const id = COMMAND.exec(text)?.[1] ?? MONITOR.exec(text)?.[1] ?? AGENT.exec(text)?.[1]
         if (id) open.set(id, { id, ...start })
       }
     }

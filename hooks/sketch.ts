@@ -16,7 +16,10 @@ export const CHUNK_BYTES = 8 * 1024 * 1024
 /** A chat that is running moves all the time: it is read again at most this often. */
 export const RUNNING_EVERY_MS = 20000
 /** What the reader knows: a cache made by an older one is read once more, for it lacks what has been added since. */
-export const SKETCH_VERSION = 3
+export const SKETCH_VERSION = 4
+
+/** Where the next read of a chat starts: after what was read, but from the start when an older reader made the cache. */
+export const sketchOffset = (c: Sketch | undefined): number => (c && c.v === SKETCH_VERSION ? c.offset : 0)
 
 /** Steps of a chat's output tokens: the size of its star. */
 export const sizeStep = (out: number): number => (out < 1e3 ? 0 : out < 1e4 ? 1 : out < 1e5 ? 2 : out < 5e5 ? 3 : 4)
@@ -85,6 +88,7 @@ export function sketchScript(items: { id: string; offset: number }[]): string {
     "$pb4 = 'running in background with ID'",
     "$pb5 = 'Monitor started (task'",
     "$pb6 = '<task-notification>'",
+    "$pb7 = 'Async agent launched successfully'",
     '$res = @{}',
     CLAUDE_DIR_PS,
     "foreach ($it in $items.Split(';')) {",
@@ -124,7 +128,7 @@ export function sketchScript(items: { id: string; offset: number }[]): string {
     '                if ($ln.Contains($p1) -or $ln.Contains($p2)) { $plan += $ln }',
     '                elseif ($ln.StartsWith($p3)) { $cost = $ln }',
     '                elseif ($ln.StartsWith($p6) -and $ln.Contains($p4) -and $ln.Contains($p5)) { $ctx = $ln }',
-    '                if ($ln.Contains($pb6) -or $ln.Contains($pb4) -or $ln.Contains($pb5)) { $bg += $ln }',
+    '                if ($ln.Contains($pb6) -or $ln.Contains($pb4) -or $ln.Contains($pb5) -or $ln.Contains($pb7)) { $bg += $ln }',
     '                elseif ($ln.Contains($p11) -and ($ln.Contains($pb1) -or $ln.Contains($pb2) -or $ln.Contains($pb3))) { $bg += $ln }',
     '              }',
     '            }',

@@ -216,6 +216,9 @@ test('a stopped chat names each task it waits for in the background, what kind i
   // a task with no time says no time
   const bare = worker({ kind: 'rest', tasks: [{ id: 'c', kind: 'bash', what: 'Run' }] })
   expect(Object.fromEntries(detailRows(bare, room, undefined, NOW))['Чекає задачу']).toBe('Run (фонова команда)')
+  // a helper agent run in the background is told from a command
+  const helper = worker({ kind: 'rest', tasks: [{ id: 'd', kind: 'agent', what: 'Review the change', at: NOW - 3 * MIN }] })
+  expect(Object.fromEntries(detailRows(helper, room, undefined, NOW))['Чекає задачу']).toBe('Review the change (фоновий агент) · 3 хв')
 })
 
 test('a chat with a task list shows how far it has got, then each step with its mark', () => {

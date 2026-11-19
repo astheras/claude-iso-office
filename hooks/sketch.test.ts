@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import type { RawSession, SketchCache } from '../types'
-import { askOf, CHUNK_BYTES, contextStep, hazeStep, MAX_SKETCHED, needsSketch, nextSketches, parseSketches, RUNNING_EVERY_MS, sizeStep, SKETCH_VERSION, sketchLook, sketchScript, withSketches } from './sketch'
+import { askOf, CHUNK_BYTES, contextStep, hazeStep, MAX_SKETCHED, needsSketch, nextSketches, parseSketches, RUNNING_EVERY_MS, sizeStep, SKETCH_VERSION, sketchLook, sketchOffset, sketchScript, withSketches } from './sketch'
 
 const NOW = Date.parse('2026-11-13T12:00:00Z')
 const AT = '2026-11-13T11:50:00.000Z'
@@ -253,10 +253,44 @@ test('the lines the script passes up are what begins, names or ends a task; a lo
   expect(parseSketches(piece({ bg: ['a', 5, 'b'] })).a!.bg).toEqual(['a', 'b'])
   expect(parseSketches(piece({})).a!.bg).toBeUndefined()
   const script = sketchScript([{ id: 'a', offset: 0 }])
-  for (const word of ['run_in_background', 'Monitor', 'TaskStop', 'running in background with ID', 'Monitor started (task', '<task-notification>', 'bg = $bg']) {
+  for (const word of ['run_in_background', 'Monitor', 'TaskStop', 'running in background with ID', 'Monitor started (task', 'Async agent launched successfully', '<task-notification>', 'bg = $bg']) {
     expect(script).toContain(word)
   }
+  // the answer to a background agent is passed up with the others, or the agent would never be seen
+  expect(script).toContain('-or $ln.Contains($pb7)')
   expect(script.includes('"')).toBe(false)
+})
+
+test('a helper agent a chat ran in the background is carried from piece to piece as a task, and its notice takes it off', () => {
+  const s = raw('a')
+  const agentStart = [
+    JSON.stringify({
+      isSidechain: false,
+      type: 'assistant',
+      message: { content: [{ type: 'tool_use', id: 'u-ag', name: 'Agent', input: { description: 'review it', prompt: 'p', run_in_background: true } }] },
+      timestamp: '2026-11-13T11:40:00.000Z',
+    }),
+    JSON.stringify({ isSidechain: false, type: 'user', message: { content: [{ tool_use_id: 'u-ag', type: 'tool_result', content: 'Async agent launched successfully.\nagentId: ag1 (internal id)' }] } }),
+  ]
+  const one = nextSketches({}, [s], [s], parseSketches(piece({ bg: agentStart, offset: 60, size: 100 })))
+  expect(one.a!.tasks!.map(t => [t.id, t.kind, t.what])).toEqual([['ag1', 'agent', 'review it']])
+  expect(withSketches([s], one)[0]!.tasks!.map(t => t.id)).toEqual(['ag1'])
+  const two = nextSketches(one, [s], [s], parseSketches(piece({ from: 60, offset: 100, size: 100, bg: [bgEnd('ag1')] })))
+  expect(two.a!.tasks).toBeUndefined()
+})
+
+test('a cache made by an older reader is read again from the start, one made by this reader goes on from where it stopped', () => {
+  expect(sketchOffset(undefined)).toBe(0)
+  expect(sketchOffset({ at: AT, offset: 50, size: 100, v: SKETCH_VERSION })).toBe(50)
+  // an older reader did not know the lines that name a background agent: only a read from the start finds them
+  expect(sketchOffset({ at: AT, offset: 50, size: 100, v: SKETCH_VERSION - 1 })).toBe(0)
+  expect(sketchOffset({ at: AT, offset: 50, size: 100 })).toBe(0)
+  // read from the start, the piece holds nothing of the old
+  const s = raw('a')
+  const old: SketchCache = { a: { at: AT, offset: 50, size: 50, tasks: [{ id: 'gone', kind: 'bash', what: 'old' }] } }
+  const again = nextSketches(old, [s], [s], parseSketches(piece({ from: 0, offset: 50, size: 50 })))
+  expect(again.a!.tasks).toBeUndefined()
+  expect(again.a!.v).toBe(SKETCH_VERSION)
 })
 
 test('a question or a plan put to the person that nothing has answered is read as a decision, and is not an MCP wait', () => {

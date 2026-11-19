@@ -31,10 +31,11 @@ export type Decision = { kind: 'question' | 'plan'; at?: number }
 export type TurnAsk = { text: string; at?: number }
 
 /**
- * Work a chat started in the background and has not been told is over: a command run in the background, or a monitor.
- * `what` is its description; `mcp` says the command goes to an MCP server (its text names one); `at` is when it began (ms).
+ * Work a chat started in the background and has not been told is over: a command run in the background, a monitor, or a
+ * helper agent. `what` is its description; `mcp` says the command goes to an MCP server (its text names one); `at` is when
+ * it began (ms).
  */
-export type BgTask = { id: string; kind: 'bash' | 'monitor'; what: string; at?: number; mcp?: boolean }
+export type BgTask = { id: string; kind: 'bash' | 'monitor' | 'agent'; what: string; at?: number; mcp?: boolean }
 
 /** A request a chat sent to a colleague chat that has not been answered: who it went to and what it said. */
 export type PeerAsk = { to: string; id: string; text: string; at: number }

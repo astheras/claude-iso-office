@@ -49,6 +49,29 @@ test('a command run in the background and a monitor are tasks, named by their de
   expect(tasksFrom([use('u6', 'Bash', { command: 'python  run.py', run_in_background: true }), answer('u6', 'Command running in background with ID: bg6.')])[0]!.what).toBe('python run.py')
 })
 
+const helper = (id: string, agent: string, description: string, secs = 0) => [
+  use(id, 'Agent', { description, prompt: 'Look at the MCP server and report', subagent_type: 'reviewer', run_in_background: true }, secs),
+  answer(id, `Async agent launched successfully. (internal note)\nagentId: ${agent} (internal id)\nThe agent is working in the background.`),
+]
+
+test('a helper agent run in the background is a task, named by its description and the id its answer gives; its notice ends it', () => {
+  const tasks = tasksFrom([...helper('u1', 'ag1', 'Review the change'), ...command('u2', 'bg2', 'Run the stand')])
+  expect(tasks.map(t => [t.id, t.kind, t.what])).toEqual([
+    ['ag1', 'agent', 'Review the change'],
+    ['bg2', 'bash', 'Run the stand'],
+  ])
+  // the prompt of an agent may only mention MCP: that does not send it to an MCP server
+  expect(tasks[0]!.mcp).toBeUndefined()
+  // the notice names the agent by the same id; one seen twice, or as the queue keeps it, is no harm
+  expect(tasksFrom([...helper('u1', 'ag1', 'x'), notice('ag1', 'completed'), queued('ag1', 'completed')])).toEqual([])
+  // it can end in a later piece of the transcript
+  const held = tasksFrom(helper('u1', 'ag1', 'x'))
+  expect(tasksFrom([notice('ag1', 'completed')], held)).toEqual([])
+  // not tasks: an agent that is waited for, and an answer that names no agent
+  expect(tasksFrom([use('u3', 'Agent', { description: 'waited', prompt: 'p' }), answer('u3', 'Async agent launched successfully.\nagentId: ag3')])).toEqual([])
+  expect(tasksFrom([use('u4', 'Agent', { description: 'no id', run_in_background: true }), answer('u4', 'Async agent launched successfully, no id')])).toEqual([])
+})
+
 test('a task that goes to an MCP server is said to: by its description or by the text of its command', () => {
   const mcpOf = (description: string, text: string) => tasksFrom(command('u1', 'bg1', description, text))[0]!.mcp
   expect(mcpOf('Run the tests through the MCP endpoint', 'sleep 1')).toBe(true)

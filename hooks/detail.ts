@@ -241,8 +241,9 @@ export const waitText = (x: { title: string; on?: string }): string => (x.on ? `
 /** The tool a running chat is held up by, as a name: «Claude_Browser · browser_batch». */
 export const mcpName = (m: McpWait): string => `${m.server} · ${m.tool}`
 
-/** One task a chat started in the background: its description, and what kind it is («монітор», «фонова команда», «MCP»). */
-export const taskText = (t: BgTask): string => `${t.what} (${[t.kind === 'monitor' ? 'монітор' : 'фонова команда', t.mcp ? 'MCP' : ''].filter(Boolean).join(', ')})`
+/** One task a chat started in the background: its description, and what kind it is («монітор», «фоновий агент», «фонова команда», «MCP»). */
+export const taskText = (t: BgTask): string =>
+  `${t.what} (${[t.kind === 'monitor' ? 'монітор' : t.kind === 'agent' ? 'фоновий агент' : 'фонова команда', t.mcp ? 'MCP' : ''].filter(Boolean).join(', ')})`
 
 /** What a stopped chat waits for in the background, in a line: the first task, and how many more. */
 export const tasksText = (w: Worker): string | undefined => {
