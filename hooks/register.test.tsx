@@ -540,7 +540,12 @@ test('the row of the current session, which has a band behind it, still opens it
   expect(await ui.find({ type: 'Text', text: /Вартість/ })).toBeDefined()
   // the band goes on behind the details that opened, so that the gradient takes them in (the mock cannot tell which box
   // lies over which: that part is checked in the app)
-  expect(await bandHeight()).toBeGreaterThan(closed)
+  const open = await bandHeight()
+  expect(open).toBeGreaterThan(closed)
+  // the row is drawn up by the band's whole height: on the desktop a margin cell is half a row of ~20 px, so two cells a row
+  const pulled = (await ui.findAll({ type: 'Box' })).filter((x: any) => typeof x.props.marginTop === 'number' && x.props.marginTop < 0)
+  expect(pulled).toHaveLength(1)
+  expect(pulled[0].props.marginTop).toBe(-2 * Math.round(open / (7.54 * 2.65)))
   // and shrinks back when the details close
   await ui.press({ key: 'pick-me' })
   await new Promise(r => (globalThis as any).setTimeout(r, 200))

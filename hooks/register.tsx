@@ -30,6 +30,9 @@ const POLL_MS = 5000
 const ROW_RATIO = 2.65
 const EXTRA_COLS = 0.6
 const CELL_PX = 7.54 // css px per cell, measured
+// A Box's margin is not counted in rows of text on the desktop: a margin cell there is half a row (~10 px against ~20).
+// Measured from a screenshot at 125%: a margin of -20 cells moved the row up 248 px of a 500 px band.
+const MARGIN_PER_ROW = 2
 // a button label that draws nothing and is not whitespace (a plain space is trimmed away): braille blank
 const BLANK = '⠀⠀⠀⠀'
 
@@ -668,7 +671,7 @@ export const register: Register = on => {
         (waitsText(w) && !w.error && !w.needsAnswer ? 1 : 0) +
         (w.mcp && !w.needsAnswer ? 1 : 0) +
         (w.tasks?.length && !w.error && !w.needsAnswer ? 1 : 0)
-      // whole rows, since the row is drawn up over the band by a margin of that many rows
+      // whole rows, since the row is drawn up over the band by a margin of whole cells (MARGIN_PER_ROW to a row)
       const bandRows = Math.max(1, Math.round(lines))
       // the band goes on behind the accordion of the open session, so that the gradient takes its details in too
       const spanRows = bandRows + (isOpen ? accordionRows(w, r) : 0)
@@ -720,15 +723,16 @@ export const register: Register = on => {
       )
       return (
         <Box flexDirection="column">
-          {Svg && isMe ? (
+          {Svg && isMe && e.surface === 'desktop' ? (
             // The band is an ordinary drawing in the flow, and the row with its accordion is drawn up over it with a negative
-            // margin. It must not be an absolute box laid over the row: that took the pointer from the buttons (no hover, no
-            // press on the current session's title). A row taller than the estimate just grows the box; a shorter one leaves
-            // a small gap.
+            // margin of the band's whole height. It must not be an absolute box laid over the row: a drawing that is not
+            // interactive is an image, and an image laid over the buttons takes the pointer from them (no hover, no press).
+            // A row that wraps is taller than the estimate: the band then ends above its last line, nothing overlaps.
+            // Only on the desktop, where the margin's cell was measured; elsewhere the row goes without a band.
             <Box flexDirection="column">
               <Svg source={currentSvg(slotPx, spanRows * ROW_PX)} alt="Поточна сесія" width={slotPx} height={Math.round(spanRows * ROW_PX)} />
               {/* the text is off the bar at the band's left edge */}
-              <Box flexDirection="column" marginTop={-spanRows} paddingLeft={1}>
+              <Box flexDirection="column" marginTop={-spanRows * MARGIN_PER_ROW} paddingLeft={1}>
                 {head}
                 {isOpen && accordion(w, r)}
               </Box>
