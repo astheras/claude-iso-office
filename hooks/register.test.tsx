@@ -527,13 +527,24 @@ test('the row of the current session, which has a band behind it, still opens it
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
   await new Promise(r => (globalThis as any).setTimeout(r, 200))
 
+  const bandHeight = async () => {
+    const bands = (await ui.findAll({ type: 'Svg' })).filter((x: any) => x.props.alt === 'Поточна сесія')
+    expect(bands).toHaveLength(1)
+    return bands[0].props.height as number
+  }
+  const closed = await bandHeight()
+
   expect(await ui.find({ type: 'Text', text: /Вартість/ })).toBeUndefined()
   await ui.press({ key: 'pick-me' })
   await new Promise(r => (globalThis as any).setTimeout(r, 300))
   expect(await ui.find({ type: 'Text', text: /Вартість/ })).toBeDefined()
-  // the band is still drawn (the mock cannot tell which box lies over which: that part is checked in the app)
-  const svgs = (await ui.findAll({ type: 'Svg' })).filter((x: any) => x.props.alt === 'Поточна сесія')
-  expect(svgs).toHaveLength(1)
+  // the band goes on behind the details that opened, so that the gradient takes them in (the mock cannot tell which box
+  // lies over which: that part is checked in the app)
+  expect(await bandHeight()).toBeGreaterThan(closed)
+  // and shrinks back when the details close
+  await ui.press({ key: 'pick-me' })
+  await new Promise(r => (globalThis as any).setTimeout(r, 200))
+  expect(await bandHeight()).toBe(closed)
   await ui.unmount()
 })
 

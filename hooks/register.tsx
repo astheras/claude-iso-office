@@ -630,6 +630,13 @@ export const register: Register = on => {
       )
     }
 
+    // how many rows the accordion takes: each detail, the note while it loads, the note on the cost. The band of the current
+    // session is as tall as its row and its accordion together
+    const accordionRows = (w: Worker, r: Room) => {
+      const mine = ds.id === w.id ? ds : undefined
+      return detailRows(w, r, mine?.data, now).length + (!mine || mine.loading ? 1 : 0) + (mine?.data?.costUSD !== undefined ? 1 : 0)
+    }
+
     // the terminal roster: one line per chat, its accordion under it when chosen
     const row = (w: Worker, r: Room) => (
       <Box flexDirection="column">
@@ -663,6 +670,8 @@ export const register: Register = on => {
         (w.tasks?.length && !w.error && !w.needsAnswer ? 1 : 0)
       // whole rows, since the row is drawn up over the band by a margin of that many rows
       const bandRows = Math.max(1, Math.round(lines))
+      // the band goes on behind the accordion of the open session, so that the gradient takes its details in too
+      const spanRows = bandRows + (isOpen ? accordionRows(w, r) : 0)
       const head = (
         <Box flexDirection="column">
           <Button key={`pick-${w.id}`} plain onPress={() => void pick($, w.id)}>
@@ -712,20 +721,24 @@ export const register: Register = on => {
       return (
         <Box flexDirection="column">
           {Svg && isMe ? (
-            // The band is an ordinary drawing in the flow, and the row is drawn up over it with a negative margin. It must
-            // not be an absolute box laid over the row: that took the pointer from the buttons (no hover, no press on the
-            // current session's title). A row taller than the estimate just grows the box; a shorter one leaves a small gap.
+            // The band is an ordinary drawing in the flow, and the row with its accordion is drawn up over it with a negative
+            // margin. It must not be an absolute box laid over the row: that took the pointer from the buttons (no hover, no
+            // press on the current session's title). A row taller than the estimate just grows the box; a shorter one leaves
+            // a small gap.
             <Box flexDirection="column">
-              <Svg source={currentSvg(slotPx, bandRows * ROW_PX)} alt="Поточна сесія" width={slotPx} height={Math.round(bandRows * ROW_PX)} />
+              <Svg source={currentSvg(slotPx, spanRows * ROW_PX)} alt="Поточна сесія" width={slotPx} height={Math.round(spanRows * ROW_PX)} />
               {/* the text is off the bar at the band's left edge */}
-              <Box marginTop={-bandRows} paddingLeft={1}>
+              <Box flexDirection="column" marginTop={-spanRows} paddingLeft={1}>
                 {head}
+                {isOpen && accordion(w, r)}
               </Box>
             </Box>
           ) : (
-            head
+            <Box flexDirection="column">
+              {head}
+              {isOpen && accordion(w, r)}
+            </Box>
           )}
-          {isOpen && accordion(w, r)}
         </Box>
       )
     }
